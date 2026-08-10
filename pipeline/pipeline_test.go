@@ -48,7 +48,7 @@ func TestNewRejectsMissingDeps(t *testing.T) {
 func TestRunSuccess(t *testing.T) {
 	h := newHarness(t)
 
-	result, err := h.pipeline.Run(context.Background(), testRequest())
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestRunSkipsWhenDiffIsEmpty(t *testing.T) {
 			h := newHarness(t)
 			h.source.diff = tt.diff
 
-			result, err := h.pipeline.Run(context.Background(), testRequest())
+			result, _, err := h.pipeline.Run(context.Background(), testRequest())
 			if err != nil {
 				t.Fatalf("スキップはエラーにすべきではありません: %v", err)
 			}
@@ -169,7 +169,7 @@ func TestRunFailures(t *testing.T) {
 			h := newHarness(t)
 			tt.arrange(h)
 
-			result, err := h.pipeline.Run(context.Background(), testRequest())
+			result, _, err := h.pipeline.Run(context.Background(), testRequest())
 			if err == nil {
 				t.Fatal("エラーを期待しましたが nil でした")
 			}
@@ -204,7 +204,7 @@ func TestRunRejectsInvalidRequest(t *testing.T) {
 	req := testRequest()
 	req.RepoURL = ""
 
-	result, err := h.pipeline.Run(context.Background(), req)
+	result, _, err := h.pipeline.Run(context.Background(), req)
 	if !errors.Is(err, review.ErrInvalidRequest) {
 		t.Fatalf("ErrInvalidRequest を期待しましたが: %v", err)
 	}
@@ -231,7 +231,7 @@ func TestRunDetachesPublishFromCallerDeadline(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // 呼び出し元は既に打ち切られている
 
-	result, err := h.pipeline.Run(ctx, testRequest())
+	result, _, err := h.pipeline.Run(ctx, testRequest())
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
@@ -252,7 +252,7 @@ func TestRunIgnoresNotifierFailure(t *testing.T) {
 	h := newHarness(t)
 	h.notifier.err = errBoom
 
-	result, err := h.pipeline.Run(context.Background(), testRequest())
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("通知の失敗で全体が失敗しています: %v", err)
 	}
@@ -266,7 +266,7 @@ func TestRunIgnoresCloseFailure(t *testing.T) {
 	h := newHarness(t)
 	h.source.closeErr = errBoom
 
-	result, err := h.pipeline.Run(context.Background(), testRequest())
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("後始末の失敗で全体が失敗しています: %v", err)
 	}
@@ -278,7 +278,7 @@ func TestRunIgnoresCloseFailure(t *testing.T) {
 func TestRunRecordsDuration(t *testing.T) {
 	h := newHarness(t)
 
-	result, err := h.pipeline.Run(context.Background(), testRequest())
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}
@@ -314,4 +314,82 @@ func TestOptions(t *testing.T) {
 			t.Error("nil ロガーで上書きされています")
 		}
 	})
+}
+
+// Run は Report も返します。レビューの中身を必要とする処理（ジョブ状態の記録など）が、
+// 通知フックへ相乗りせずに済むようにするためです。
+func TestRunReturnsReport(t *testing.T) {
+	h := newHarness(t)
+
+	_, report, err := h.pipeline.Run(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("予期しないエラー: %v", err)
+	}
+	if report == nil {
+		t.Fatal("成功時は Report が返るべきです")
+	}
+	if report.Title != testReport().Title {
+		t.Errorf("Title = %q, want %q", report.Title, testReport().Title)
+	}
+	if len(report.Findings) != 1 {
+		t.Errorf("findings 件数 = %d, want 1", len(report.Findings))
+	}
+}
+
+// レビューへ到達しなかった場合は Report が nil です。
+func TestRunReturnsNilReportWithoutReview(t *testing.T) {
+	tests := []struct {
+		name    string
+		arrange func(*harness)
+	}{
+		{"差分なし", func(h *harness) { h.source.diff = "" }},
+		{"準備に失敗", func(h *harness) { h.factory.openErr = errBoom }},
+		{"AIレビューに失敗", func(h *harness) { h.reviewer.err = errBoom }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			tt.arrange(h)
+
+			_, report, _ := h.pipeline.Run(context.Background(), testRequest())
+			if report != nil {
+				t.Fatalf("Report は nil であるべきです: %+v", report)
+			}
+		})
+	}
+}
+
+// 保存に失敗した場合はレビュー自体は成立しているため、Report とエラーの両方が返ります。
+// 呼び出し側が「レビューはできたが残せなかった」を区別できます。
+func TestRunReturnsReportWhenPublishFails(t *testing.T) {
+	h := newHarness(t)
+	h.publisher.err = errBoom
+
+	_, report, err := h.pipeline.Run(context.Background(), testRequest())
+	if err == nil {
+		t.Fatal("エラーを期待しましたが nil でした")
+	}
+	if report == nil {
+		t.Fatal("レビューは成立しているため Report が返るべきです")
+	}
+	if report.Title != testReport().Title {
+		t.Errorf("Title = %q", report.Title)
+	}
+}
+
+// 検証で弾いた場合も Report は nil です。
+func TestRunReturnsNilReportForInvalidRequest(t *testing.T) {
+	h := newHarness(t)
+
+	req := testRequest()
+	req.RepoURL = ""
+
+	_, report, err := h.pipeline.Run(context.Background(), req)
+	if err == nil {
+		t.Fatal("エラーを期待しましたが nil でした")
+	}
+	if report != nil {
+		t.Fatalf("Report は nil であるべきです: %+v", report)
+	}
 }

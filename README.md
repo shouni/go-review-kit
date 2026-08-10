@@ -50,7 +50,7 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | カテゴリ | パッケージ | 役割と責務 |
 | :--- | :--- | :--- |
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
-| **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → AI → 保存 → 通知 を制御します。 |
+| **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → AI → 保存 → 通知 を制御し、結果を返します。 |
 | **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。 |
 | | **`gemini`** | `review.Reviewer` の実体。ResponseSchema で構造化出力を制約します。 |
 
@@ -62,7 +62,7 @@ go-review-kit
 │   ├── result.go    #   Result / Status（SUCCESS / SKIPPED / FAILURE）
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
 │   └── ports.go     #   Reviewer / DiffSource / Publisher / Notifier ほか
-├── pipeline/        # 実行：Run(ctx, Request) (Result, error)
+├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
 ├── git/             # 実装：gogit.go / cli.go / refs.go / auth.go / factory.go
 └── gemini/          # 実装：reviewer.go / schema.go
 ```
@@ -125,7 +125,7 @@ func run(
 		return err
 	}
 
-	result, err := p.Run(ctx, review.Request{
+	result, report, err := p.Run(ctx, review.Request{
 		JobID:      "20260810-213000-a1b2c3d4", // 任意。相関ID
 		RepoURL:    "ssh://git@github.com/shouni/example.git",
 		Base:       "main",
@@ -139,7 +139,9 @@ func run(
 		return err
 	}
 
-	log.Printf("status=%s published=%v duration=%s", result.Status, result.Published(), result.Duration)
+	// report はレビューが成立した場合のみ非 nil です。
+	log.Printf("status=%s published=%v duration=%s findings=%d",
+		result.Status, result.Published(), result.Duration, len(report.Findings))
 	return nil
 }
 ```
@@ -149,7 +151,7 @@ func run(
 工程名はエラー自身が持っているため、別のフィールドと突き合わせる必要はありません。
 
 ```go
-result, err := p.Run(ctx, req)
+result, _, err := p.Run(ctx, req)
 switch {
 case errors.Is(err, review.ErrInvalidRequest):
 	// 入力不備
@@ -176,6 +178,13 @@ case err != nil:
 
 * **差分が無いのは失敗ではありません。** `Run` は `StatusSkipped` と `nil` を返します。成果物の
   有無は `Result.Published()` で判別できます。
+* **`Run` はレビュー結果（`*Report`）も返します。** レビューが成立した場合のみ非 nil です。
+  保存に失敗した場合は `Report` が非 nil のままエラーも返るため、「レビューはできたが残せ
+  なかった」を区別できます。レビューの中身を使う処理（ジョブ状態の記録など）は、`Notifier`
+  を実装するのではなくこの戻り値から組み立ててください。
+* **`Notifier` は外向きの通知のためのものです。** 呼び出し元の締切から切り離して呼ばれるので、
+  レビューが打ち切られた直後でも届きます。逆に言えば、その切り離しが要らない処理をここへ
+  載せる理由はありません。
 * **`Publisher` が呼ばれるのは成功時だけです。** 差分なし・失敗のときは公開する内容が存在しない
   ため、`Notifier` だけが呼ばれます。
 * **`Notifier` は必ず 1 回呼ばれます。** 成功・スキップ・失敗のいずれでも呼ばれ、保存に失敗した
@@ -212,7 +221,7 @@ sequenceDiagram
 
     alt 差分なし
         PL->>NT: Notify(StatusSkipped)
-        PL-->>App: Result{SKIPPED}, nil
+        PL-->>App: Result{SKIPPED}, nil, nil
     else 差分あり
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt
@@ -221,7 +230,7 @@ sequenceDiagram
         PL->>PB: Publish(ctx, req, report)
         PB-->>PL: ok
         PL->>NT: Notify(StatusSucceeded, Report)
-        PL-->>App: Result{SUCCESS}, nil
+        PL-->>App: Result{SUCCESS}, Report, nil
     end
 
     Note over PL,NT: Publish / Notify / Close は呼び出し元の締切から切り離して実行

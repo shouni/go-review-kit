@@ -55,8 +55,11 @@ Hexagonal (ports and adapters), strictly layered:
   every port. Ports are deliberately 1–2 methods each: `Reviewer`, `DiffSource`,
   `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`. Changing a signature here ripples
   into every adapter and into `git-gemini-web` — check that repo before doing so.
-- **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, error)` is the single orchestration
-  entrypoint; there is no second layer under it. Dependencies arrive as a `Deps` struct (not
+- **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, *Report, error)` is the single
+  orchestration entrypoint; there is no second layer under it. The `*Report` exists so callers
+  that need the review's contents (recording job state, say) can read them from the return value
+  instead of implementing a `Notifier` to intercept them — `Notifier` is for outward notification,
+  which is the only thing that needs the detached context. Dependencies arrive as a `Deps` struct (not
   positional args, so a mis-ordered interface can't compile clean). Only a genuine successful review
   is published (`Publisher.Publish`); empty-diff and error outcomes are notified only. Empty diff is
   **not** a failure: `Run` returns `StatusSkipped` with a nil error.
