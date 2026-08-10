@@ -1,0 +1,74 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    line-height: 1.6;
+}
+
+.review-verdict {
+    display: inline-block;
+    padding: 0.5em 1em;
+    border-radius: 6px;
+    font-size: 1.1em;
+    margin-bottom: 1em;
+}
+.verdict-None    { background: #e6f4ea; color: #1e7b34; }
+.verdict-Minor   { background: #fff8e1; color: #8a6d00; }
+.verdict-Major   { background: #fff0e0; color: #b35900; }
+.verdict-Blocker { background: #fdecea; color: #c62828; }
+
+.review-meta {
+    color: #666;
+    font-size: 0.9em;
+    border-left: 3px solid #ddd;
+    padding-left: 0.75em;
+    margin-bottom: 1em;
+}
+
+.review-summary {
+    font-size: 1.05em;
+    margin-bottom: 1.5em;
+}
+
+.review-findings {
+    list-style: none;
+    padding: 0;
+}
+
+.finding {
+    border-left: 4px solid #ccc;
+    background: #fafafa;
+    border-radius: 4px;
+    padding: 0.75em 1em;
+    margin-bottom: 1em;
+}
+.finding-Blocker { border-left-color: #c62828; }
+.finding-Major   { border-left-color: #b35900; }
+.finding-Minor   { border-left-color: #8a6d00; }
+
+.finding-severity {
+    display: inline-block;
+    font-weight: bold;
+    margin-right: 0.5em;
+}
+
+.finding-location {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: #555;
+    font-size: 0.9em;
+}
+
+.finding-excerpt, .finding-suggestion {
+    background: #f0f0f0;
+    color: #24292f;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 0.5em 0.75em;
+    overflow-x: auto;
+    font-size: 0.9em;
+    margin: 0.5em 0;
+    box-shadow: none;
+}
+
+.finding-message {
+    display: block;
+    margin-top: 0.5em;
+}
