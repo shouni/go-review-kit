@@ -18,6 +18,13 @@ import (
 //
 // Request は常に値として受け渡され、パイプラインの途中で書き換えられることはありません。
 type Request struct {
+	// JobID は、呼び出し側が持つ相関IDです（任意）。
+	//
+	// 本ライブラリはこの値を生成も解釈もせず、Publisher / Notifier へそのまま渡し、
+	// ログ属性に載せるだけです。ジョブ基盤を持つ呼び出し側が、成果物の保存先や進行状況の
+	// 記録先を自分で決められるようにするための素通し用のフィールドで、この値の書式や
+	// 一意性は呼び出し側の責務です。
+	JobID      string `json:"job_id,omitempty"`
 	RepoURL    string `json:"repo_url"`       // GitリポジトリのURL (例: ssh://git@github.com/user/repo)
 	Base       string `json:"base_branch"`    // 比較元の参照 (ブランチ・タグ・コミットハッシュ)
 	Head       string `json:"feature_branch"` // 比較対象の参照 (ブランチ・タグ・コミットハッシュ)

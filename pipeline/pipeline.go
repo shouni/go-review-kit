@@ -102,7 +102,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	case errors.Is(err, review.ErrEmptyDiff):
 		result := review.Skipped(req, elapsed)
 		p.logger.InfoContext(ctx, "差分が無いためレビューをスキップしました",
-			"repo_url", req.RepoURL, "base", req.Base, "head", req.Head)
+			"job_id", req.JobID, "repo_url", req.RepoURL, "base", req.Base, "head", req.Head)
 		p.notify(ctx, review.Notification{Request: req, Result: result})
 		return result, nil
 
@@ -119,6 +119,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 
 	result := review.Succeeded(req, elapsed)
 	p.logger.InfoContext(ctx, "レビューパイプラインが完了しました",
+		"job_id", req.JobID,
 		"repo_url", req.RepoURL,
 		"status", result.Status,
 		"storage_uri", result.StorageURI,
@@ -204,7 +205,7 @@ func (p *Pipeline) failWith(
 	result := review.Failed(req, elapsed, err)
 
 	p.logger.ErrorContext(ctx, "レビューパイプラインが失敗しました",
-		"repo_url", req.RepoURL, "step", review.StepOf(err), "error", err)
+		"job_id", req.JobID, "repo_url", req.RepoURL, "step", review.StepOf(err), "error", err)
 	p.notifyOn(ctx, review.Notification{Request: req, Result: result, Report: report, Err: err})
 
 	return result, err

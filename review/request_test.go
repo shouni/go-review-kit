@@ -3,6 +3,7 @@ package review
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -137,5 +138,49 @@ func TestRequestJSONTagsAreCompatible(t *testing.T) {
 	}
 	if got != validRequest() {
 		t.Fatalf("デコード結果が一致しません: %+v", got)
+	}
+}
+
+// JobID は呼び出し側の相関IDで、本ライブラリは生成も解釈もしません。
+// 必須にすると、ジョブ基盤を持たない呼び出し側が使えなくなります。
+func TestRequestJobIDIsOptional(t *testing.T) {
+	req := validRequest()
+	req.JobID = ""
+
+	if err := req.Validate(); err != nil {
+		t.Fatalf("JobID なしで検証に失敗しました: %v", err)
+	}
+
+	req.JobID = "20260810-213000-a1b2c3d4"
+	if err := req.Validate(); err != nil {
+		t.Fatalf("JobID ありで検証に失敗しました: %v", err)
+	}
+}
+
+// JobID を持たない既存ペイロードは job_id なしでエンコードされます。
+// 常に出力すると、この形を読む側に空文字の分岐を強いることになります。
+func TestRequestJobIDJSON(t *testing.T) {
+	data, err := json.Marshal(validRequest())
+	if err != nil {
+		t.Fatalf("エンコードに失敗: %v", err)
+	}
+	if strings.Contains(string(data), "job_id") {
+		t.Errorf("JobID が空なのに出力されています: %s", data)
+	}
+
+	req := validRequest()
+	req.JobID = "20260810-213000-a1b2c3d4"
+
+	data, err = json.Marshal(req)
+	if err != nil {
+		t.Fatalf("エンコードに失敗: %v", err)
+	}
+
+	var restored Request
+	if err := json.Unmarshal(data, &restored); err != nil {
+		t.Fatalf("デコードに失敗: %v", err)
+	}
+	if restored.JobID != req.JobID {
+		t.Errorf("JobID = %q, want %q", restored.JobID, req.JobID)
 	}
 }

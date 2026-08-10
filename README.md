@@ -130,6 +130,7 @@ func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, 
 	}
 
 	result, err := p.Run(ctx, review.Request{
+		JobID:      "20260810-213000-a1b2c3d4", // 任意。相関ID（後述）
 		RepoURL:    "ssh://git@github.com/shouni/example.git",
 		Base:       "main",
 		Head:       "develop",
@@ -147,6 +148,16 @@ func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, 
 	return nil
 }
 ```
+
+### 相関ID（`JobID`）
+
+`Request.JobID` は**呼び出し側が持つ相関ID**で、本ライブラリは生成も解釈もしません。
+`Publisher` / `Notifier` へそのまま渡り、パイプラインのログ属性 `job_id` に載るだけです。
+
+ジョブ基盤（Cloud Tasks + 進行状況の記録など）を持つ呼び出し側が、成果物の保存先や状態
+ファイルの位置を自分で決められるようにするための素通し用のフィールドです。本ライブラリが
+ジョブの概念を持たずに済むよう、書式も一意性も呼び出し側の責務にしています。未設定でも
+動作するため、ジョブ基盤を持たない呼び出し側は無視してください。
 
 ### エラーの判別
 
