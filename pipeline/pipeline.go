@@ -80,6 +80,15 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 
 // Run は、レビュー要求の全工程を実行します。
 //
+// 戻り値の Report は、AI がレビューを返した場合のみ非 nil です。差分が無かった場合や、
+// レビューへ到達する前に失敗した場合は nil になります。保存に失敗した場合は Report が
+// 非 nil のままエラーも返るので、「レビューはできたが残せなかった」を呼び出し側で
+// 区別できます。
+//
+// Report を返すのは、レビューの中身（題目・判定・指摘）を必要とする処理を通知フックへ
+// 相乗りさせずに済ませるためです。ジョブの状態を記録する呼び出し側が、通知を名乗る
+// アダプターを書かなくても Run の戻り値から組み立てられます。
+//
 // 差分が無かった場合は StatusSkipped の Result と nil を返します（失敗ではないため）。
 // 呼び出し側が「実行はしたが成果物は無い」を判別できるよう、Result.Published で確認できます。
 //
@@ -88,7 +97,7 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 // 打ち切られた直後は context が既に期限切れなので、失敗を報告する通知まで道連れで
 // 失敗します。いちばん報告が必要な場面でだけ通知が届かない、という裏返った挙動になるため、
 // context.WithoutCancel で締切を外し、代わりに publishTimeout を与えます。
-func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, error) {
+func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, *review.Report, error) {
 	start := time.Now()
 
 	if err := req.Validate(); err != nil {
@@ -104,7 +113,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		p.logger.InfoContext(ctx, "差分が無いためレビューをスキップしました",
 			"job_id", req.JobID, "repo_url", req.RepoURL, "base", req.Base, "head", req.Head)
 		p.notify(ctx, review.Notification{Request: req, Result: result})
-		return result, nil
+		return result, nil, nil
 
 	case err != nil:
 		return p.fail(ctx, req, nil, err, elapsed)
@@ -114,6 +123,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	defer cancel()
 
 	if err := p.deps.Publisher.Publish(publishCtx, req, report); err != nil {
+		// レビュー自体は成立しているため、Report は返します。
 		return p.failWith(publishCtx, req, &report, review.WrapStep(review.StepPublish, err), elapsed)
 	}
 
@@ -128,7 +138,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	)
 	p.notifyOn(publishCtx, review.Notification{Request: req, Result: result, Report: &report})
 
-	return result, nil
+	return result, &report, nil
 }
 
 // produce は、差分の取得から AI レビューまでを実行します。
@@ -187,7 +197,7 @@ func (p *Pipeline) fail(
 	report *review.Report,
 	err error,
 	elapsed time.Duration,
-) (review.Result, error) {
+) (review.Result, *review.Report, error) {
 	notifyCtx, cancel := p.detach(ctx)
 	defer cancel()
 
@@ -201,14 +211,14 @@ func (p *Pipeline) failWith(
 	report *review.Report,
 	err error,
 	elapsed time.Duration,
-) (review.Result, error) {
+) (review.Result, *review.Report, error) {
 	result := review.Failed(req, elapsed, err)
 
 	p.logger.ErrorContext(ctx, "レビューパイプラインが失敗しました",
 		"job_id", req.JobID, "repo_url", req.RepoURL, "step", review.StepOf(err), "error", err)
 	p.notifyOn(ctx, review.Notification{Request: req, Result: result, Report: report, Err: err})
 
-	return result, err
+	return result, report, err
 }
 
 // notify は、締切を切り離した context で通知します。
