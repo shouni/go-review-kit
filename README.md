@@ -1,66 +1,168 @@
 # 🤖 Go Review Kit
 
-[![CI](https://github.com/shouni/gemini-reviewer-core/actions/workflows/ci.yml/badge.svg)](https://github.com/shouni/gemini-reviewer-core/actions/workflows/ci.yml)
+[![CI](https://github.com/shouni/go-review-kit/actions/workflows/ci.yml/badge.svg)](https://github.com/shouni/go-review-kit/actions/workflows/ci.yml)
 [![Language](https://img.shields.io/badge/Language-Go-blue)](https://golang.org/)
-[![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/gemini-reviewer-core)](https://golang.org/)
-[![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/gemini-reviewer-core)](https://github.com/shouni/gemini-reviewer-core/tags)
+[![Go Version](https://img.shields.io/github/go-mod/go-version/shouni/go-review-kit)](https://golang.org/)
+[![GitHub tag (latest by date)](https://img.shields.io/github/v/tag/shouni/go-review-kit)](https://github.com/shouni/go-review-kit/tags)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Go Reference](https://pkg.go.dev/badge/github.com/shouni/gemini-reviewer-core.svg)](https://pkg.go.dev/github.com/shouni/gemini-reviewer-core)
-[![Status](https://img.shields.io/badge/Status-Completed-brightgreen)](#)
+[![Go Reference](https://pkg.go.dev/badge/github.com/shouni/go-review-kit.svg)](https://pkg.go.dev/github.com/shouni/go-review-kit)
 
 ## 🚀 概要 (About)
 
-**Go Review Kit** は、Gitリポジトリのブランチ間の差分をGoogle Gemini APIでレビューし、結果を公開するまでの一連の処理をまとめたコアエンジンです。
+**Go Review Kit** は、Git リポジトリのブランチ間の差分を AI でレビューし、結果を公開するまでの
+一連の処理をまとめたライブラリです。
 
-「Git操作 → 差分抽出 → AIレビュー → 結果公開」という流れをライブラリとして切り出しています。
+「Git 操作 → 差分抽出 → AI レビュー → 結果公開 → 通知」という流れを、呼び出し側が組み替えられる
+形で切り出しています。バイナリは含みません（`main` パッケージはありません）。
 
-AIの出力はGeminiのResponseSchemaでJSON構造化して安定させているため、コードに限らず、Markdown原稿のレビューなど呼び出し側の用途に応じて柔軟に使えます。
+AI の出力は Gemini の ResponseSchema で JSON 構造化したうえで `review.Report` へデコードするため、
+コードに限らず Markdown 原稿のレビューなど、呼び出し側の用途に応じて柔軟に使えます。
+
+> 本リポジトリは [`gemini-reviewer-core`](https://github.com/shouni/gemini-reviewer-core) の機能を
+> 引き継いだ完全な再設計版です。移行にあたっての変更点は [設計上の変更点](#-設計上の変更点-design-changes)
+> を参照してください。
 
 ---
 
 ## 🎯 特徴 (Key Features)
 
 ### 実行環境の切り替え
-* **ワークフローの共通化:** レビューの「手順」が Core パッケージに集約されているため、CLI でも Web でも同一のロジック・品質でレビューが動作します。
-* **環境に応じた実行戦略:** サーバーレス環境（`go-git`）とローカル環境（`os/exec`）を用途に応じて切り替え可能です。
-* **マルチクラウド対応:** GCS/S3 への公開を `ports` で抽象化し、保存先を問わず扱えます。
+* **ワークフローの共通化:** レビューの手順は `pipeline` に集約されているため、CLI でも Web でも
+  同一のロジックでレビューが動作します。
+* **環境に応じた実行戦略:** `git.GoGit`（go-git・使い捨て環境向け）と `git.CLI`（ローカル git
+  コマンド・チェックアウト再利用）を用途に応じて選べます。
+* **マルチクラウド対応:** GCS / S3 への公開を `review.Publisher` で抽象化し、保存先を問わず扱えます。
 
 ### Git 操作
-* **柔軟な参照解決:** ブランチ名だけでなく、コミットハッシュ（`f921111` 等）を直接指定したレビューが可能です。
-* **安全な解決優先順位:** 数字のみのブランチ名（チケット番号等）でも、ハッシュ値より先にリモートブランチを探索し、意図しない Detached HEAD を防ぎます。
-* **クリーンアップ:** 実行のたびに `git checkout -f` および `git clean -f -d` を実行し、クリーンな状態でレビューを開始します。
+* **柔軟な参照解決:** ブランチ名だけでなく、タグやコミットハッシュ（`f921111` 等）を直接指定した
+  レビューが可能です。
+* **安全な解決優先順位:** 数字のみのブランチ名（チケット番号等）でも、ハッシュ値より先にリモート
+  ブランチを探索し、意図しない Detached HEAD を防ぎます。
+* **クリーンアップ:** `git.CLI` は実行のたびに基準参照へ戻して未追跡ファイルを削除し、`git.GoGit`
+  は作業ディレクトリごと破棄します。
 
 ### アーキテクチャ
-* **DIP（依存性逆転の原則）:** ヘキサゴナルアーキテクチャ（Ports and Adapters）に基づき、ストレージや AI モデルの切り替えがしやすい構成です。
-* **テスト容易性:** インターフェース（Ports）中心の設計のため、モックへの差し替えが容易です。
+* **DIP（依存性逆転の原則）:** ヘキサゴナルアーキテクチャに基づき、ストレージや AI モデルの
+  切り替えがしやすい構成です。
+* **テスト容易性:** ポートが 1〜2 メソッドに絞られているため、モックへの差し替えが容易です。
 
 ---
 
 ## 📂 プロジェクト構造 (Project Structure)
 
-本ライブラリは、「核心的な契約（Ports）」「実行ロジック（Workflow/Runner）」「具体的な実装（Adapters）」をパッケージレベルで厳密に分離しています。
-
-### 📦 プロジェクトの責務 (Project Responsibilities)
+### 📦 パッケージの責務 (Package Responsibilities)
 
 | カテゴリ | パッケージ | 役割と責務 |
 | :--- | :--- | :--- |
-| **Core (契約)** | **`ports`** | すべてのインターフェースとデータ構造を定義。プロジェクトの「憲法」です。 |
-| **Logic (実行)** | **`workflow`** | レビューの全体工程（Git → AI → Publish）を制御するオーケストレーターです。 |
-| | **`runner`** | 「レビュー生成」や「結果公開」といった、各工程の具体的な実行ロジックです。 |
-| **Adapter (実装)** | **`git`** | リポジトリ操作の実体。`go-git` または Local CLI を切り替え可能です。 |
-| | **`ai`** | Gemini API との通信を担当。ResponseSchemaで構造化出力(JSON)を制約し、安定した結果を返します。 |
-| | **`publisher`** | 結果の HTML 変換や、マルチクラウドストレージへの保存を担当します。 |
+| **Core (契約)** | **`review`** | ドメイン型（`Request` / `Report` / `Result`）、番兵エラー、全ポートの定義。他のどのパッケージにも依存しません。 |
+| **Logic (実行)** | **`pipeline`** | レビューの全工程（準備 → 差分 → プロンプト → AI → 公開 → 通知）を制御するオーケストレーターです。 |
+| **Adapter (実装)** | **`git`** | 差分取得の実体。`GoGit`（go-git）と `CLI`（ローカル git）を切り替え可能です。 |
+| | **`gemini`** | Gemini API との通信を担当。ResponseSchema で構造化出力を制約し、`review.Report` を返します。 |
+| | **`publish`** | 結果の HTML 変換と、リモートストレージへの保存を担当します。 |
 
 ### 🖇 プロジェクトツリー (Project Tree)
 
 ```text
-gemini-reviewer-core
-├── ports/          # 核心：Interface 定義 (ai.go, git.go, publisher.go, workflow.go)
-├── runner/         # 実行：単一工程のロジック (review.go, publish.go)
-├── workflow/       # 指揮：全体のパイプライン制御 (workflow.go)
-├── ai/             # 実装：Gemini API アダプター
-├── git/            # 実装：Git 操作アダプター (Local/Go-Git)
-└── publisher/      # 実装：成果物出力アダプター (JSON→HTML/Storage)
+go-review-kit
+├── review/          # 契約：ドメイン型とポート定義
+│   ├── request.go   #   Request（New で検証、値として受け渡す）
+│   ├── report.go    #   Report / Verdict / Finding / Severity / Decision
+│   ├── result.go    #   Result / Status（SUCCESS / SKIPPED / FAILURE）
+│   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
+│   └── ports.go     #   Reviewer / DiffSource / Publisher / Notifier ほか
+├── pipeline/        # 指揮：Run(ctx, Request) (Result, error)
+├── git/             # 実装：DiffSource（gogit.go / cli.go / refs.go / auth.go）
+├── gemini/          # 実装：Reviewer（reviewer.go / schema.go）
+└── publish/         # 実装：Publisher（JSON → HTML → ストレージ）
+```
+
+---
+
+## 🧩 使い方 (Usage)
+
+呼び出し側は、`pipeline.Deps` に実装を差し込んで `Run` を呼ぶだけです。
+`PromptGenerator` は用途ごとに文面が変わるため、呼び出し側が実装します。
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/shouni/go-review-kit/gemini"
+	"github.com/shouni/go-review-kit/git"
+	"github.com/shouni/go-review-kit/pipeline"
+	"github.com/shouni/go-review-kit/publish"
+	"github.com/shouni/go-review-kit/review"
+)
+
+func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, prompts review.PromptGenerator) error {
+	// 差分取得元（永続的な作業ディレクトリを使う場合は NewCLIFactory）
+	sources, err := git.NewGoGitFactory("/var/tmp/reviews", git.WithSSHKey("~/.ssh/id_ed25519"))
+	if err != nil {
+		return err
+	}
+
+	reviewer, err := gemini.New(ctx, gemini.Options{ProjectID: "my-project"})
+	if err != nil {
+		return err
+	}
+
+	converter, err := publish.NewConverter()
+	if err != nil {
+		return err
+	}
+	publisher, err := publish.New(writer, converter)
+	if err != nil {
+		return err
+	}
+
+	p, err := pipeline.New(pipeline.Deps{
+		Sources:   sources,
+		Prompts:   prompts,
+		Reviewer:  reviewer,
+		Publisher: publisher,
+		Notifier:  notifier,
+	})
+	if err != nil {
+		return err
+	}
+
+	result, err := p.Run(ctx, review.Request{
+		RepoURL:    "ssh://git@github.com/shouni/example.git",
+		Base:       "main",
+		Head:       "develop",
+		Mode:       "detail",
+		Model:      "gemini-2.5-pro",
+		StorageURI: "gs://bucket/review.html",
+		PublicURL:  "https://example.com/review.html",
+	})
+	if err != nil {
+		return err
+	}
+
+	// 差分が無かった場合は StatusSkipped で返り、成果物は作られません。
+	log.Printf("status=%s published=%v duration=%s", result.Status, result.Published(), result.Duration)
+	return nil
+}
+```
+
+### エラーの判別
+
+失敗は通常の `error` として返り、種類は番兵エラーで判別できます。工程名はエラー自身が
+持っているため、別のフィールドと突き合わせる必要はありません。
+
+```go
+result, err := p.Run(ctx, req)
+switch {
+case errors.Is(err, review.ErrInvalidRequest):
+	// 入力不備
+case errors.Is(err, review.ErrRefNotFound):
+	// ブランチ・コミットが見つからない
+case err != nil:
+	log.Printf("%s で失敗しました: %v", review.StepOf(err), err)
+}
 ```
 
 ---
@@ -70,100 +172,94 @@ gemini-reviewer-core
 ```mermaid
 sequenceDiagram
     participant App as Application (CLI/Web)
-    participant WF as Workflow
-    participant RR as ReviewRunner
-    participant Git as GitService (Local/Go-Git)
-    participant PG as PromptGenerator
-    participant AI as CodeReviewAI (Gemini)
-    participant PR as PublishRunner
-    participant Pub as Publisher (HTML Output)
-    participant Conv as Converter (go-prompt-kit jsonconverter)
-    participant Store as StorageWriter (GCS/S3)
-    participant Noti as Notifier (Slack)
+    participant PL as pipeline.Pipeline
+    participant SF as DiffSourceFactory (git)
+    participant DS as DiffSource
+    participant PG as PromptGenerator (呼び出し側)
+    participant AI as Reviewer (gemini)
+    participant PB as Publisher (publish)
+    participant NT as Notifier (呼び出し側)
 
-    App->>WF: Execute(ctx, ReviewRequest)
+    App->>PL: Run(ctx, Request)
+    PL->>PL: Request.Validate()
+    PL->>SF: Open(ctx, req)
+    SF->>DS: clone / fetch
+    SF-->>PL: DiffSource
+    PL->>DS: Diff(ctx, base, head)
+    DS-->>PL: patch
 
-    rect rgb(240, 248, 255)
-        Note over WF, RR: 【フェーズ1】レビュー実行
-        WF->>RR: Run(ctx, req)
-        RR->>Git: CloneOrUpdate (Open or Clone)
-        RR->>Git: Fetch (Sync with Remote)
-        RR->>Git: CheckRefExists
-        RR->>Git: GetCodeDiff
-
-        alt 差分あり
-            RR->>PG: GenerateReview(mode, diff)
-            PG-->>RR: prompt
-            RR->>AI: ReviewCodeDiff(model, prompt)
-            AI-->>RR: Structured Content (JSON, ResponseSchema制約)
-        else 差分なし
-            RR->>RR: IsSkipped = true (レポート生成は行わない)
-        end
-
-        RR->>Git: Cleanup
-        RR-->>WF: ReviewProcessOutcome (Status, JSON content only if reviewed)
+    alt 差分なし
+        PL->>NT: Notify(StatusSkipped)
+        PL-->>App: Result{SKIPPED}, nil
+    else 差分あり
+        PL->>PG: Generate(mode, diff)
+        PG-->>PL: prompt
+        PL->>AI: Review(ctx, model, prompt)
+        AI-->>PL: review.Report
+        PL->>PB: Publish(ctx, req, report)
+        PB-->>PL: ok
+        PL->>NT: Notify(StatusSucceeded, Report)
+        PL-->>App: Result{SUCCESS}, nil
     end
 
-    rect rgb(255, 245, 238)
-        Note over WF, PR: 【フェーズ2】結果公開と通知
-        WF->>PR: Run(ctx, outcome)
-
-        alt Outcome にエラーあり、またはスキップ
-            PR->>Noti: Notify (ctx, outcome)
-            Note over PR, Noti: 公開する実質的な内容がないためPublishは行わない
-        else 正常にレビュー完了
-            PR->>Pub: Publish(ctx, outcome)
-            Note over Pub, Conv: メタ情報(日時/リポジトリ)をJSONに付与
-            Pub->>Conv: Run(Merged JSON)
-            Conv-->>Pub: HTML (io.Reader)
-            Pub->>Store: Write(uri, html_reader, content_type)
-            Pub-->>PR: Done
-            PR->>Noti: Notify (ctx, outcome)
-        end
-
-        PR-->>WF: ReviewResult
-    end
-
-    WF-->>App: Pipeline Completed
+    Note over PL,DS: Close は呼び出し元の締切から切り離して実行
 ```
 
-> **Note:** `ai.GeminiAdapter` は、AIの自由記述に起因する出力揺れを避けるため ResponseSchema で
-> 制約した **JSON文字列**(`{title, summary, verdict: {decision, reason}, findings: [{severity, file,
-> line, excerpt, message, suggestion}]}`。`severity` は `Blocker`/`Major`/`Minor`、`verdict.decision` は
-> それに `None` を加えた4値のenumで制約)を
-> `ReviewCodeDiff` の戻り値として返します。
-> `Publisher`/`Converter` は go-prompt-kit の `jsonconverter` を使いこのJSONを直接HTML化するため、
-> Markdownへの変換は不要です。公開する実質的な内容があるのは成功時のみのため、エラー時・スキップ時は
-> `Publisher.Publish`(HTML化・ストレージ保存)を行わず、`Notifier.Notify` のみを実行します。
+---
 
-## 🧩 Git 操作アダプターの選択
+## 🔧 設計上の変更点 (Design Changes)
 
-実行環境に合わせて、2種類の Git 操作アダプターを選択できます。
+`gemini-reviewer-core` からの主な変更点です。移植ではなく作り直しているため、API に互換性は
+ありません。
 
-| 特徴 | Adapter | LocalAdapter |
-| --- | --- | --- |
-| **戦略** | 純粋な Go 実装 (`go-git`) | 外部コマンド (`git`) |
-| **更新** | **Fetch 主体 (エフェメラル)** | **Fetch & Reset 主体 (状態管理)** |
-| **強み** | OS 非依存、インメモリ操作 | 強力なクリーンアップ、高速な差分抽出 |
-| **認証** | Go 内での認証管理 | OS 標準 (SSH/Agent/Config) |
-| **制御** | `context.Context` に完全準拠 | `exec.CommandContext` でタイムアウト制御 |
-| **適性** | サーバーレス・コンテナ環境 | ローカル開発・CI パイプライン |
+| # | 旧 (`gemini-reviewer-core`) | 新 (`go-review-kit`) | 理由 |
+| :-- | :--- | :--- | :--- |
+| 1 | `ports` に全 interface と全 DTO を集約 | `review` にドメイン型とポートを置き、ポートは 1〜2 メソッドへ分解 | 1 箇所の変更が全パッケージへ波及するのを防ぐため |
+| 2 | `Outcome.Error` / `IsSkipped` でエラーと状態を運搬 | 通常の `(T, error)` と番兵エラー（`ErrEmptyDiff` ほか） | `errors.Is` が効かず、状態が増えるたびにフィールドが増えるため |
+| 3 | `Outcome.StepName` で工程名を別持ち | `review.StepError`（`StepOf` で取得） | 工程名とエラーは一組で意味を持つため |
+| 4 | AI 結果を JSON 文字列のまま受け渡し、公開側で `map[string]any` へ再パース | `review.Report` へ AI アダプターで一度だけデコード | 層をまたぐ間ずっと型が付かないため |
+| 5 | `workflow` と `runner` の 2 階層、`Execute` は `Result` を捨てる | `pipeline.Run` が `(Result, error)` を返す | 呼び出し側が結果を受け取れなかったため |
+| 6 | `GitService` の 5 メソッド（順序を呼び出し側が知る必要あり） | `DiffSourceFactory.Open` + `DiffSource.Diff/Close` | 呼び出し順序は Git 実装の都合であり、ワークフローの関心ではないため |
+| 7 | `Configurable` / `SetBaseBranch` セッターと公開可変フィールド | 生成時にのみ適用する関数オプション（error を返せる） | 生成後に設定が書き換わる余地をなくすため |
+| 8 | `slog` のパッケージ既定ロガーを直接呼び出し | `WithLogger` でロガーを注入、すべて `~Context` | 出力先や属性を呼び出し側が制御できなかったため |
+| 9 | スキーマ側に重大度の文字列配列を二重定義 | `review.Severities()` / `Decisions()` を単一の出所に | 値を増やしたときに検証側と食い違うため |
+| 10 | 成功・スキップをどちらも `SUCCESS` で返す | `StatusSkipped` を新設（`Result.Published()`） | 成果物の有無を呼び出し側が判別できなかったため |
+
+### 挙動として直したもの
+
+* **公開失敗時にも通知するようにしました。** 旧実装は公開に失敗した場合、通知せずに戻っていました。
+* **後始末を呼び出し元の締切から切り離しました。** レビューがタイムアウトで打ち切られた直後は
+  context が期限切れのため、旧実装では作業ディレクトリの後始末も道連れで失敗していました
+  （公開処理については旧実装でも切り離し済みです）。
+* **`git diff` の標準出力と標準エラーを分けました。** まとめて受け取ると、git の警告が差分の本文に
+  混ざり、そのまま AI へのプロンプトに入ります。
+* **エラーラップを `%w` に統一しました。** 旧実装の一部は `%s` で文字列化しており、`errors.Is` /
+  `errors.As` の連鎖が切れていました。
+* **go-git 側の差分取得を context 対応にしました。** 旧実装は `_ context.Context` でキャンセル
+  できませんでした。
 
 ---
 
-## ✨ 技術スタック (Technology Stack)
+## 🛠 開発 (Development)
 
-| 要素 | 技術 / ライブラリ | 役割 |
-| --- | --- | --- |
-| **言語** | **Go (Golang)** | ライブラリの開発言語。 |
-| **Git 操作** | **[`go-git`](https://github.com/go-git/go-git)** | クローン、フェッチ、**3-dot diff** の取得まで完結。SSH 認証とホストキー検証を統合。 |
-| **AI 推論** | **[`go-gemini-client`](https://github.com/shouni/go-gemini-client)** | Gemini API へのアクセス。リトライ等を備えた通信 SDK をラッピングして提供。 |
-| **JSON→HTML 変換** | **[`go-prompt-kit`](https://github.com/shouni/go-prompt-kit)** | 構造化されたレビュー結果JSON(`jsonconverter`)を、スタイル付きの完全な HTML ドキュメントに変換。 |
+```bash
+go build ./...
+go test -race ./...
+go vet ./...
+gofmt -l .
+
+# Lint（CI と同じピン留めバージョン）
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
+
+# 脆弱性チェック
+go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+```
+
+CI（`.github/workflows/ci.yml`）は `main` / `develop` への push と PR で、Build & Test・Lint・
+govulncheck を別ジョブとして実行します。
 
 ---
 
-### 📜 ライセンス (License)
+## 📄 ライセンス (License)
 
-このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
-
----
+MIT License. 詳細は [LICENSE](LICENSE) を参照してください。
