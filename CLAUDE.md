@@ -7,14 +7,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Go Review Kit is a library (not a standalone binary) that provides the engine for AI review of git
 diffs: open a repo, extract a diff between two refs, generate a structured review via Gemini
 (ResponseSchema-constrained; not limited to code — see `gemini/schema.go`), hand the result to a
-caller-supplied `review.Publisher`, and notify. It is consumed by the
-downstream app `git-gemini-web` (Web), which supplies the concrete adapters and owns the process
-entrypoint.
+caller-supplied `review.Publisher`, and notify. It is consumed by the downstream app
+`git-gemini-web` (Web), which supplies the concrete adapters and owns the process entrypoint.
 
-This module is a complete redesign of `gemini-reviewer-core`, not a port of it. That repo still
-exists at its own module path and is **not** kept in sync — do not copy code or API shapes back and
-forth. `README.md` documents every intentional divergence in its 設計上の変更点 table; read it before
-making non-trivial changes.
+`README.md` has a 動作の約束 section listing the guarantees callers are allowed to rely on (empty
+diff is not a failure, Publisher only runs on success, Notifier always runs exactly once, publish
+and cleanup detach from the caller's deadline). Those are contract, not incidental behaviour — read
+it before changing `pipeline`.
+
+An older library, `gemini-reviewer-core`, covered the same ground and still exists at its own module
+path. It is **not** kept in sync with this one; do not copy code or API shapes between them.
 
 ## Commands
 
