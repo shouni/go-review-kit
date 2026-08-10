@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Go Review Kit is a library (not a standalone binary) that provides the engine for AI review of git
 diffs: open a repo, extract a diff between two refs, generate a structured review via Gemini
-(ResponseSchema-constrained; not limited to code — see `gemini/schema.go`), publish the result
-(JSON→HTML via `go-prompt-kit`'s `jsonconverter`) to storage, and notify. It is consumed by the
+(ResponseSchema-constrained; not limited to code — see `gemini/schema.go`), hand the result to a
+caller-supplied `review.Publisher`, and notify. It is consumed by the
 downstream app `git-gemini-web` (Web), which supplies the concrete adapters and owns the process
 entrypoint.
 
@@ -66,15 +66,18 @@ Hexagonal (ports and adapters), strictly layered:
 - **`gemini`** — `Reviewer`, the only `review.Reviewer` implementation, wraps `go-gemini-client/gemini`
   (imported aliased as `geminiclient`, same collision). It decodes the model output into a
   `review.Report` exactly once; no other layer sees the raw JSON.
-- **`publish`** — JSON→HTML conversion (via `go-prompt-kit/md/jsonconverter`, templated in
-  `publish/assets/report.html` + `report.css`) and storage writes behind `review.Publisher`.
+
+There is deliberately **no publisher implementation here**. How a report is represented (JSON, HTML,
+a database row) and where it goes is decided by the consuming app's UI, so shipping one would have
+pulled `go-prompt-kit` / `go-remote-io` / `go-utils` into every consumer for a rendering they may
+not want. Direct dependencies are `go-git` and `go-gemini-client` only — keep it that way.
 
 ## Working conventions
 
 - Comments, doc comments, error messages, and README are Japanese. Commit messages are concise
   English.
 - Comments should explain *why*, not restate the code. Several comments in this repo record a
-  decision and the failure it prevents (e.g. why refs resolve remote-branch-first, why publish and
+  decision and the failure it prevents (e.g. why refs resolve remote-branch-first, why publishing and
   cleanup detach from the caller's deadline) — keep that style and don't strip those explanations.
 - This repo has no `main` package; nothing here talks to a real repo URL or Gemini API at runtime
   outside of tests. Prefer table-driven tests with the existing `fake*` types in each package's

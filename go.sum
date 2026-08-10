@@ -92,12 +92,6 @@ github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3 h1:n661drycOFuPLCN
 github.com/sergi/go-diff v1.3.2-0.20230802210424-5b0b94c5c0d3/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
 github.com/shouni/go-gemini-client v1.17.0 h1:Wc4E175j/cOxryWmD2lQZ6LrQW6mk9542YM7wdEPuIk=
 github.com/shouni/go-gemini-client v1.17.0/go.mod h1:RrWlwUI7y6WASyl92m7pRgZzA7PZ7HHnoKscsCQdzwc=
-github.com/shouni/go-prompt-kit v1.4.1 h1:eH7ZLVFPgeRix/53/uzixHOi9MxVMp76ZIHxYgZcx2w=
-github.com/shouni/go-prompt-kit v1.4.1/go.mod h1:V7zDajbwItE1NWNG3xuzCJQKutB9GQksEyppVrsqiUE=
-github.com/shouni/go-remote-io v1.8.0 h1:+YbK9w1KIJccF+SzfMJS7odUVyIVd0iSTaQ37MGz+Xc=
-github.com/shouni/go-remote-io v1.8.0/go.mod h1:xlyZSdei+CtCN80OCWl9es7aagglMyCesJubEscyDt4=
-github.com/shouni/go-utils v1.5.0 h1:uYjAMebKGDoZFDBZxugndcyTyaCpmNXd8KgnzueqnOg=
-github.com/shouni/go-utils v1.5.0/go.mod h1:MRR3X08kWJ+sSS2+KRuvWEikXui5Tixg9vta6r30SnE=
 github.com/shouni/netarmor v1.2.0 h1:dubvM231CMkYz6bhYNB29Gp4YA3UnP6Wq0wfwzMFxnI=
 github.com/shouni/netarmor v1.2.0/go.mod h1:WxojUH0M+Z2lqZH2vw572A1zn5l1VkH7V47rnTnZmVY=
 github.com/sirupsen/logrus v1.7.0/go.mod h1:yWOB1SBYBC5VeMP7gHvWumXLIWorT60ONWic61uBYv0=

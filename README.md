@@ -12,8 +12,11 @@
 **Go Review Kit** は、Git リポジトリのブランチ間の差分を AI でレビューし、結果を公開するまでの
 一連の処理をまとめたライブラリです。
 
-「Git 操作 → 差分抽出 → AI レビュー → 結果公開 → 通知」という流れを、呼び出し側が組み替えられる
+「Git 操作 → 差分抽出 → AI レビュー → 結果の保存 → 通知」という流れを、呼び出し側が組み替えられる
 形で切り出しています。バイナリは含みません（`main` パッケージはありません）。
+
+**成果物の表現と保存先には踏み込みません。** `review.Publisher` を実装するのは呼び出し側で、
+JSON で残すのか、HTML に整形するのか、どこへ置くのかはすべて呼び出し側が決めます。
 
 AI の出力は Gemini の ResponseSchema で JSON 構造化したうえで `review.Report` へデコードするため、
 コードに限らず Markdown 原稿のレビューなど、呼び出し側の用途に応じて柔軟に使えます。
@@ -31,7 +34,8 @@ AI の出力は Gemini の ResponseSchema で JSON 構造化したうえで `rev
   同一のロジックでレビューが動作します。
 * **環境に応じた実行戦略:** `git.GoGit`（go-git・使い捨て環境向け）と `git.CLI`（ローカル git
   コマンド・チェックアウト再利用）を用途に応じて選べます。
-* **マルチクラウド対応:** GCS / S3 への公開を `review.Publisher` で抽象化し、保存先を問わず扱えます。
+* **保存先を選ばない:** 結果の保存を `review.Publisher` で抽象化しているため、GCS / S3 / ローカル /
+  データベースのいずれでも、呼び出し側の実装次第で扱えます。
 
 ### Git 操作
 * **柔軟な参照解決:** ブランチ名だけでなく、タグやコミットハッシュ（`f921111` 等）を直接指定した
@@ -58,7 +62,6 @@ AI の出力は Gemini の ResponseSchema で JSON 構造化したうえで `rev
 | **Logic (実行)** | **`pipeline`** | レビューの全工程（準備 → 差分 → プロンプト → AI → 公開 → 通知）を制御するオーケストレーターです。 |
 | **Adapter (実装)** | **`git`** | 差分取得の実体。`GoGit`（go-git）と `CLI`（ローカル git）を切り替え可能です。 |
 | | **`gemini`** | Gemini API との通信を担当。ResponseSchema で構造化出力を制約し、`review.Report` を返します。 |
-| | **`publish`** | 結果の HTML 変換と、リモートストレージへの保存を担当します。 |
 
 ### 🖇 プロジェクトツリー (Project Tree)
 
@@ -72,8 +75,7 @@ go-review-kit
 │   └── ports.go     #   Reviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 指揮：Run(ctx, Request) (Result, error)
 ├── git/             # 実装：DiffSource（gogit.go / cli.go / refs.go / auth.go）
-├── gemini/          # 実装：Reviewer（reviewer.go / schema.go）
-└── publish/         # 実装：Publisher（JSON → HTML → ストレージ）
+└── gemini/          # 実装：Reviewer（reviewer.go / schema.go）
 ```
 
 ---
@@ -93,11 +95,16 @@ import (
 	"github.com/shouni/go-review-kit/gemini"
 	"github.com/shouni/go-review-kit/git"
 	"github.com/shouni/go-review-kit/pipeline"
-	"github.com/shouni/go-review-kit/publish"
 	"github.com/shouni/go-review-kit/review"
 )
 
-func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, prompts review.PromptGenerator) error {
+// publisher / notifier / prompts は呼び出し側の実装です。
+func run(
+	ctx context.Context,
+	publisher review.Publisher,
+	notifier review.Notifier,
+	prompts review.PromptGenerator,
+) error {
 	// 差分取得元（永続的な作業ディレクトリを使う場合は NewCLIFactory）
 	sources, err := git.NewGoGitFactory("/var/tmp/reviews", git.WithSSHKey("~/.ssh/id_ed25519"))
 	if err != nil {
@@ -105,15 +112,6 @@ func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, 
 	}
 
 	reviewer, err := gemini.New(ctx, gemini.Options{ProjectID: "my-project"})
-	if err != nil {
-		return err
-	}
-
-	converter, err := publish.NewConverter()
-	if err != nil {
-		return err
-	}
-	publisher, err := publish.New(writer, converter)
 	if err != nil {
 		return err
 	}
@@ -136,8 +134,8 @@ func run(ctx context.Context, writer remoteio.Writer, notifier review.Notifier, 
 		Head:       "develop",
 		Mode:       "detail",
 		Model:      "gemini-2.5-pro",
-		StorageURI: "gs://bucket/review.html",
-		PublicURL:  "https://example.com/review.html",
+		StorageURI: "gs://bucket/reviews/20260810-213000-a1b2c3d4/report.json",
+		PublicURL:  "https://example.com/history/20260810-213000-a1b2c3d4",
 	})
 	if err != nil {
 		return err
@@ -188,7 +186,7 @@ sequenceDiagram
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
     participant AI as Reviewer (gemini)
-    participant PB as Publisher (publish)
+    participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
     App->>PL: Run(ctx, Request)
@@ -229,6 +227,7 @@ sequenceDiagram
 | 2 | `Outcome.Error` / `IsSkipped` でエラーと状態を運搬 | 通常の `(T, error)` と番兵エラー（`ErrEmptyDiff` ほか） | `errors.Is` が効かず、状態が増えるたびにフィールドが増えるため |
 | 3 | `Outcome.StepName` で工程名を別持ち | `review.StepError`（`StepOf` で取得） | 工程名とエラーは一組で意味を持つため |
 | 4 | AI 結果を JSON 文字列のまま受け渡し、公開側で `map[string]any` へ再パース | `review.Report` へ AI アダプターで一度だけデコード | 層をまたぐ間ずっと型が付かないため |
+| 4b | `publisher` パッケージが HTML 変換とストレージ書き込みを同梱 | `review.Publisher` ポートのみ。実装は呼び出し側 | 成果物の表現（HTML か JSON か）は利用側の画面設計に従属するため。あわせて `go-prompt-kit` / `go-remote-io` / `go-utils` への依存が落ちました |
 | 5 | `workflow` と `runner` の 2 階層、`Execute` は `Result` を捨てる | `pipeline.Run` が `(Result, error)` を返す | 呼び出し側が結果を受け取れなかったため |
 | 6 | `GitService` の 5 メソッド（順序を呼び出し側が知る必要あり） | `DiffSourceFactory.Open` + `DiffSource.Diff/Close` | 呼び出し順序は Git 実装の都合であり、ワークフローの関心ではないため |
 | 7 | `Configurable` / `SetBaseBranch` セッターと公開可変フィールド | 生成時にのみ適用する関数オプション（error を返せる） | 生成後に設定が書き換わる余地をなくすため |
