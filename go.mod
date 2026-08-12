@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/go-git/go-git/v5 v5.19.2
-	github.com/shouni/go-gemini-client v1.17.0
+	github.com/shouni/go-gemini-client v1.17.1
 )
 
 require (
