@@ -23,7 +23,10 @@ type CLI struct {
 }
 
 // 実装がポートを満たすことをコンパイル時に確認します。
-var _ Source = (*CLI)(nil)
+var (
+	_ Source                   = (*CLI)(nil)
+	_ review.WorkspaceProvider = (*CLI)(nil)
+)
 
 // NewCLI は、localPath を作業ディレクトリとする CLI を生成します。
 func NewCLI(localPath string, opts ...Option) (*CLI, error) {
@@ -109,6 +112,30 @@ func (c *CLI) Diff(ctx context.Context, base, head string) (string, error) {
 	)
 }
 
+// CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
+// review.WorkspaceProvider の実装です。
+//
+// チェックアウト後に未追跡ファイルも削除します。作業ディレクトリは実行をまたいで
+// 再利用されるため、前回の実行が Close まで到達せず落ちていた場合の残骸が、head の
+// 内容としてレビュアーに読まれるのを防ぎます。
+func (c *CLI) CheckoutHead(ctx context.Context, head string) (string, error) {
+	headRef, isBranch, err := c.resolve(ctx, head)
+	if err != nil {
+		return "", fmt.Errorf("head の参照を解決できませんでした: %w", err)
+	}
+
+	if err := c.forceCheckout(ctx, headRef, isBranch); err != nil {
+		return "", fmt.Errorf("head のチェックアウトに失敗しました: %w", err)
+	}
+
+	if _, err := c.run(ctx, "clean", "-f", "-d"); err != nil {
+		return "", fmt.Errorf("head チェックアウト後のクリーンに失敗しました: %w", err)
+	}
+
+	c.settings.logger.InfoContext(ctx, "head をチェックアウトしました", "path", c.localPath, "head", headRef)
+	return c.localPath, nil
+}
+
 // Close は、基準参照へ強制的に戻したうえで未追跡ファイルを削除します。
 // 作業ディレクトリ自体は次回の実行で再利用するため残します。
 func (c *CLI) Close(ctx context.Context) error {
@@ -141,16 +168,23 @@ func (c *CLI) checkoutBase(ctx context.Context) error {
 		return fmt.Errorf("後始末の基準参照を解決できませんでした: %w", err)
 	}
 
-	// -f を付けてローカルの変更を破棄します。前回の実行が途中で落ちていても、
-	// 次の実行を必ずきれいな状態から始められるようにするためです。
-	args := []string{"checkout", "-f", baseRef}
-	if isBranch {
-		args = []string{"checkout", "-f", "-B", localBranchName(baseRef), baseRef}
-	}
-	if _, err := c.run(ctx, args...); err != nil {
+	if err := c.forceCheckout(ctx, baseRef, isBranch); err != nil {
 		return fmt.Errorf("後始末のチェックアウトに失敗しました: %w", err)
 	}
 	return nil
+}
+
+// forceCheckout は、解決済みの参照へ作業ツリーを強制的に切り替えます。
+//
+// -f を付けてローカルの変更を破棄します。前回の実行が途中で落ちていても、
+// 次の実行を必ずきれいな状態から始められるようにするためです。
+func (c *CLI) forceCheckout(ctx context.Context, ref string, isBranch bool) error {
+	args := []string{"checkout", "-f", ref}
+	if isBranch {
+		args = []string{"checkout", "-f", "-B", localBranchName(ref), ref}
+	}
+	_, err := c.run(ctx, args...)
+	return err
 }
 
 // resolve は、参照文字列をリモートブランチまたはコミットとして解決します。

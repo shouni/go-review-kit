@@ -62,6 +62,11 @@ type Finding struct {
 	Excerpt    string   `json:"excerpt"`
 	Message    string   `json:"message"`
 	Suggestion string   `json:"suggestion,omitempty"`
+	// Evidence は、指摘の根拠としてレビュアーが参照した箇所です（任意）。
+	// 作業ディレクトリを調べる WorkspaceReviewer 実装が、差分の外のどのファイルを
+	// 確認して判断したかを残す用途を想定しています。検証はしません（レビュアーの
+	// 自己申告であり、欠けても成果物は成立するためです）。
+	Evidence []string `json:"evidence,omitempty"`
 }
 
 // Report は、AI が返すレビュー結果です。

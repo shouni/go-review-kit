@@ -25,11 +25,19 @@ const DefaultPublishTimeout = 2 * time.Minute
 // 位置引数ではなく構造体で受け取るのは、同じ型（インターフェース）の引数が並ぶと
 // 順序を取り違えてもコンパイルが通ってしまうためです。
 type Deps struct {
-	Sources   review.DiffSourceFactory
-	Prompts   review.PromptGenerator
-	Reviewer  review.Reviewer
-	Publisher review.Publisher
-	Notifier  review.Notifier
+	Sources review.DiffSourceFactory
+	Prompts review.PromptGenerator
+	// Reviewer は、差分だけで完結する単発のレビュアーです。
+	// WorkspaceReviewer とはどちらか一方だけを設定します。
+	Reviewer review.Reviewer
+	// WorkspaceReviewer は、作業ディレクトリを参照するレビュアーです。
+	// 設定する場合、Sources が返す DiffSource は review.WorkspaceProvider を満たす
+	// 必要があります（git パッケージの 2 実装はどちらも満たします）。
+	// レビュアーの使い分けはリクエスト単位ではなくパイプライン単位です。モードごとに
+	// 使い分けたい呼び出し側は、アダプターを共有した Pipeline を 2 つ組んでください。
+	WorkspaceReviewer review.WorkspaceReviewer
+	Publisher         review.Publisher
+	Notifier          review.Notifier
 }
 
 func (d Deps) validate() error {
@@ -40,7 +48,6 @@ func (d Deps) validate() error {
 	}{
 		{"Sources", d.Sources},
 		{"Prompts", d.Prompts},
-		{"Reviewer", d.Reviewer},
 		{"Publisher", d.Publisher},
 		{"Notifier", d.Notifier},
 	} {
@@ -48,6 +55,16 @@ func (d Deps) validate() error {
 			missing = append(missing, dep.name)
 		}
 	}
+
+	// レビュアーは「どちらか一方だけ」です。両方設定されていると、どちらで実行される
+	// つもりだったのかが Deps から読み取れず、静かに片方を無視すると設定ミスに気付けません。
+	switch {
+	case d.Reviewer == nil && d.WorkspaceReviewer == nil:
+		missing = append(missing, "Reviewer または WorkspaceReviewer")
+	case d.Reviewer != nil && d.WorkspaceReviewer != nil:
+		return fmt.Errorf("pipeline: Reviewer と WorkspaceReviewer は同時に設定できません（どちらか一方にしてください）")
+	}
+
 	if len(missing) > 0 {
 		return fmt.Errorf("pipeline: 依存が未設定です: %s", strings.Join(missing, ", "))
 	}
@@ -164,7 +181,37 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (review.Repo
 
 	p.logger.InfoContext(ctx, "AIレビューを実行します", "mode", req.Mode, "model", req.Model, "diff_bytes", len(diff))
 
-	report, err := p.deps.Reviewer.Review(ctx, req.Model, prompt)
+	return p.review(ctx, source, req, prompt)
+}
+
+// review は、Deps に設定されている方のレビュアーで AI レビューを実行します。
+func (p *Pipeline) review(ctx context.Context, source review.DiffSource, req review.Request, prompt string) (review.Report, error) {
+	if p.deps.WorkspaceReviewer == nil {
+		report, err := p.deps.Reviewer.Review(ctx, req.Model, prompt)
+		if err != nil {
+			return review.Report{}, review.WrapStep(review.StepReview, err)
+		}
+		return report, nil
+	}
+
+	// Head を明示的にチェックアウトします（理由は review.Workspace のドキュメントを参照）。
+	// これを省くと、レビュアーは前回の実行が残した別参照の内容を読んでしまいます。
+	provider, ok := source.(review.WorkspaceProvider)
+	if !ok {
+		return review.Report{}, review.WrapStep(review.StepCheckout,
+			fmt.Errorf("差分取得元 (%T) が作業ディレクトリを提供できません: review.WorkspaceProvider を満たす実装が必要です", source))
+	}
+
+	dir, err := provider.CheckoutHead(ctx, req.Head)
+	if err != nil {
+		return review.Report{}, review.WrapStep(review.StepCheckout, err)
+	}
+
+	report, err := p.deps.WorkspaceReviewer.ReviewWorkspace(ctx, req.Model, prompt, review.Workspace{
+		Dir:  dir,
+		Base: req.Base,
+		Head: req.Head,
+	})
 	if err != nil {
 		return review.Report{}, review.WrapStep(review.StepReview, err)
 	}

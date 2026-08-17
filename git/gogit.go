@@ -31,7 +31,10 @@ type GoGit struct {
 }
 
 // 実装がポートを満たすことをコンパイル時に確認します。
-var _ Source = (*GoGit)(nil)
+var (
+	_ Source                   = (*GoGit)(nil)
+	_ review.WorkspaceProvider = (*GoGit)(nil)
+)
 
 // NewGoGit は、localPath を作業ディレクトリとする GoGit を生成します。
 func NewGoGit(localPath string, opts ...Option) (*GoGit, error) {
@@ -150,6 +153,36 @@ func (g *GoGit) Diff(ctx context.Context, base, head string) (string, error) {
 		return "", fmt.Errorf("パッチの生成に失敗しました: %w", err)
 	}
 	return patch.String(), nil
+}
+
+// CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
+// review.WorkspaceProvider の実装です。
+//
+// go-git のチェックアウトは context を受け取れないため、ctx は取り消しには効かず
+// ログにだけ使います（シグネチャはポート側の統一です）。
+func (g *GoGit) CheckoutHead(ctx context.Context, head string) (string, error) {
+	if g.repo == nil {
+		return "", fmt.Errorf("git: Prepare が完了していません")
+	}
+
+	hash, err := g.resolve(head)
+	if err != nil {
+		return "", fmt.Errorf("head の参照を解決できませんでした: %w", err)
+	}
+
+	worktree, err := g.repo.Worktree()
+	if err != nil {
+		return "", fmt.Errorf("ワークツリーの取得に失敗しました: %w", err)
+	}
+
+	// Force で作業ツリーのローカル変更を破棄します。クローン直後は既定ブランチの内容の
+	// ままであり、レビュアーが読むのは必ず head の状態でなければならないためです。
+	if err := worktree.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true}); err != nil {
+		return "", fmt.Errorf("head のチェックアウトに失敗しました (%s): %w", head, err)
+	}
+
+	g.settings.logger.InfoContext(ctx, "head をチェックアウトしました", "path", g.localPath, "head", head)
+	return g.localPath, nil
 }
 
 // Close は作業ディレクトリを削除します。

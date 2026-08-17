@@ -30,6 +30,7 @@ const (
 	StepPrepare  = "リポジトリの準備"
 	StepDiff     = "コード差分取得"
 	StepPrompt   = "プロンプト生成"
+	StepCheckout = "Headチェックアウト"
 	StepReview   = "AIレビュー"
 	StepPublish  = "結果公開"
 )

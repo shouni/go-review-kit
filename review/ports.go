@@ -40,6 +40,40 @@ type Reviewer interface {
 	Review(ctx context.Context, model, prompt string) (Report, error)
 }
 
+// Workspace は、Head をチェックアウト済みのローカル作業ディレクトリです。
+//
+// DiffSource.Diff は作業ツリーを使わずに差分を作るため、作業ツリーの内容が Head の状態で
+// ある保証はありません。WorkspaceReviewer へ渡す前に、パイプラインが
+// WorkspaceProvider.CheckoutHead で Head を明示的にチェックアウトします。
+type Workspace struct {
+	// Dir は、Head をチェックアウトした作業ディレクトリのパスです。
+	Dir string
+	// Base は、比較元の参照です。
+	Base string
+	// Head は、比較対象の参照です。Dir の内容はこの参照の状態です。
+	Head string
+}
+
+// WorkspaceReviewer は、プロンプトに加えて作業ディレクトリを参照できるレビュアーです。
+//
+// Reviewer が差分だけで完結する単発のレビューを表すのに対し、こちらは差分の外
+// （変更されなかったファイル、前後の章など）を実装が自分で調べるエージェント型を想定して
+// います。どちらで実行するかは、pipeline.Deps にどちらを設定するかで決まります。
+type WorkspaceReviewer interface {
+	ReviewWorkspace(ctx context.Context, model, prompt string, ws Workspace) (Report, error)
+}
+
+// WorkspaceProvider は、Head をチェックアウトした作業ディレクトリを用意できる DiffSource の
+// 追加能力です。
+//
+// DiffSource 本体に含めないのは、単発レビューだけの構成にはチェックアウトが不要なためです。
+// パイプラインは WorkspaceReviewer が設定されている場合にだけ、この能力を型アサーションで
+// 要求します。
+type WorkspaceProvider interface {
+	// CheckoutHead は、head を作業ツリーへチェックアウトし、そのディレクトリを返します。
+	CheckoutHead(ctx context.Context, head string) (dir string, err error)
+}
+
 // Publisher は、レビュー結果を成果物として公開します。
 //
 // 呼ばれるのはレビューが成立したときだけです。差分なし・失敗の場合は公開する内容が
