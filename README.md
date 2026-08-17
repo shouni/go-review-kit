@@ -214,7 +214,7 @@ sequenceDiagram
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
-    participant AI as Reviewer /<br>WorkspaceReviewer (呼び出し側)
+    participant AI as Reviewer or WorkspaceReviewer (呼び出し側)
     participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
