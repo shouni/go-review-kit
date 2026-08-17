@@ -12,9 +12,10 @@
 **Go Review Kit** は、「Git の差分を取る → AI にレビューさせる → 結果を保存する → 通知する」を
 1 本のパイプラインとして提供するライブラリです。`main` パッケージは持ちません。
 
-AI の出力は Gemini の ResponseSchema で構造を制約したうえで `review.Report` へデコードします。
-自由記述の Markdown に起因する出力の揺れが起きないため、コードに限らず Markdown 原稿の
-レビューなど、プロンプト次第で用途を変えられます。
+同梱の `gemini` レビュアーは、AI の出力を ResponseSchema で構造を制約したうえで
+`review.Report` へデコードします。自由記述の Markdown に起因する出力の揺れが起きないため、
+コードに限らず Markdown 原稿のレビューなど、プロンプト次第で用途を変えられます。
+エージェント型のレビュアー（`review.WorkspaceReviewer`）を呼び出し側が差し込むこともできます。
 
 ### 扱わないこと
 
@@ -42,6 +43,10 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
   1〜2 メソッドに絞ってあるため、テストのモックは数行で書けます。
 * **工程が 1 階層:** `pipeline.Run` が唯一の入口で、その下に中間層はありません。
 * **エラーは戻り値:** 失敗は通常の `error` として返り、種類は番兵エラーで判別できます。
+* **レビュアーは 2 系統:** 差分だけで完結する `Reviewer`（本リポジトリの `gemini` が実体）と、
+  Head をチェックアウトした作業ディレクトリを自分で調べられる `WorkspaceReviewer`
+  （エージェント型。実体は呼び出し側が提供）です。`pipeline.Deps` にはどちらか一方だけを
+  設定します。モードごとに使い分けたい場合は、アダプターを共有した Pipeline を 2 つ組みます。
 
 ---
 
@@ -50,9 +55,9 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | カテゴリ | パッケージ | 役割と責務 |
 | :--- | :--- | :--- |
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
-| **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → AI → 保存 → 通知 を制御し、結果を返します。 |
-| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。 |
-| | **`gemini`** | `review.Reviewer` の実体。ResponseSchema で構造化出力を制約します。 |
+| **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → (Head チェックアウト) → AI → 保存 → 通知 を制御し、結果を返します。 |
+| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします。 |
+| | **`gemini`** | `review.Reviewer`（単発）の実体。ResponseSchema で構造化出力を制約します。 |
 
 ```text
 go-review-kit
@@ -61,7 +66,7 @@ go-review-kit
 │   ├── report.go    #   Report / Verdict / Finding / Severity / Decision
 │   ├── result.go    #   Result / Status（SUCCESS / SKIPPED / FAILURE）
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
-│   └── ports.go     #   Reviewer / DiffSource / Publisher / Notifier ほか
+│   └── ports.go     #   Reviewer / WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
 ├── git/             # 実装：gogit.go / cli.go / refs.go / auth.go / factory.go
 └── gemini/          # 実装：reviewer.go / schema.go
@@ -195,6 +200,11 @@ case err != nil:
   タイムアウト付きの context を渡すことがあります。そのまま使うと、レビューが締切で打ち切られた
   直後は context が期限切れなので、失敗を報告する通知や作業ディレクトリの後始末まで道連れで
   失敗します。上限は `pipeline.WithPublishTimeout` で変更できます。
+* **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
+  触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
+  `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。この構成では
+  `DiffSourceFactory` が返す `DiffSource` は `review.WorkspaceProvider` を満たす必要があります
+  （`git` パッケージの 2 実装はどちらも満たします）。
 
 ---
 
@@ -207,7 +217,7 @@ sequenceDiagram
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
-    participant AI as Reviewer (gemini)
+    participant AI as Reviewer (gemini) /<br>WorkspaceReviewer (呼び出し側)
     participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
@@ -225,8 +235,16 @@ sequenceDiagram
     else 差分あり
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt
-        PL->>AI: Review(ctx, model, prompt)
+
+        alt Reviewer 構成（単発）
+            PL->>AI: Review(ctx, model, prompt)
+        else WorkspaceReviewer 構成（エージェント型）
+            PL->>DS: CheckoutHead(ctx, head)
+            DS-->>PL: 作業ディレクトリ（Head の状態）
+            PL->>AI: ReviewWorkspace(ctx, model, prompt, ws)
+        end
         AI-->>PL: review.Report
+
         PL->>PB: Publish(ctx, req, report)
         PB-->>PL: ok
         PL->>NT: Notify(StatusSucceeded, Report)

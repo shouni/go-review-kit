@@ -52,7 +52,10 @@ Hexagonal (ports and adapters), strictly layered:
   this module. Holds the domain types (`Request`, `Report`/`Verdict`/`Finding`/`Severity`/`Decision`,
   `Result`/`Status`), the sentinel errors (`ErrEmptyDiff`, `ErrRefNotFound`, `ErrInvalidReport`, …),
   `StepError` (which carries the failing step name — there is no separate step field anywhere), and
-  every port. Ports are deliberately 1–2 methods each: `Reviewer`, `DiffSource`,
+  every port. Ports are deliberately 1–2 methods each: `Reviewer`, `WorkspaceReviewer` (agent-style
+  reviewer that inspects the checked-out worktree; exactly one of the two goes into
+  `pipeline.Deps`), `DiffSource` (+ the optional `WorkspaceProvider` capability — `CheckoutHead` —
+  which the pipeline demands via type assertion only when `WorkspaceReviewer` is configured),
   `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`. Changing a signature here ripples
   into every adapter and into `git-gemini-web` — check that repo before doing so.
 - **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, *Report, error)` is the single

@@ -10,6 +10,10 @@ import (
 //
 // 列挙値は review パッケージの定義から組み立てます。旧実装はスキーマ側にも重大度の
 // 文字列配列を持っていたため、値を足したときに検証側と食い違う余地がありました。
+//
+// findings に evidence が無いのは同期漏れではありません。Evidence は作業ディレクトリを
+// 調べる WorkspaceReviewer が「どこを見て判断したか」を残すフィールドで、差分しか
+// 見ていない単発レビュアーに出力させると根拠の捏造を促すことになります。
 func reportSchema() *geminiclient.Schema {
 	return &geminiclient.Schema{
 		Type: geminiclient.TypeObject,
