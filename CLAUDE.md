@@ -5,10 +5,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 Go Review Kit is a library (not a standalone binary) that provides the engine for AI review of git
-diffs: open a repo, extract a diff between two refs, generate a structured review via Gemini
-(ResponseSchema-constrained; not limited to code — see `gemini/schema.go`), hand the result to a
-caller-supplied `review.Publisher`, and notify. It is consumed by the downstream app
-`git-gemini-web` (Web), which supplies the concrete adapters and owns the process entrypoint.
+diffs: open a repo, extract a diff between two refs, run a caller-supplied reviewer
+(`review.Reviewer` or the workspace-inspecting `review.WorkspaceReviewer`), hand the typed
+`review.Report` to a caller-supplied `review.Publisher`, and notify. Since v1.3.0 the kit ships
+**no AI adapter** — reviewer implementations (and the AI SDK choice) live in the consuming app.
+It is consumed by the downstream app `adk-review` (Web/Worker), which supplies the concrete
+adapters and owns the process entrypoint.
 
 `README.md` has a 動作の約束 section listing the guarantees callers are allowed to rely on (empty
 diff is not a failure, Publisher only runs on success, Notifier always runs exactly once, publish
@@ -57,7 +59,7 @@ Hexagonal (ports and adapters), strictly layered:
   `pipeline.Deps`), `DiffSource` (+ the optional `WorkspaceProvider` capability — `CheckoutHead` —
   which the pipeline demands via type assertion only when `WorkspaceReviewer` is configured),
   `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`. Changing a signature here ripples
-  into every adapter and into `git-gemini-web` — check that repo before doing so.
+  into every adapter and into `adk-review` — check that repo before doing so.
 - **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, *Report, error)` is the single
   orchestration entrypoint; there is no second layer under it. The `*Report` exists so callers
   that need the review's contents (recording job state, say) can read them from the return value
@@ -71,14 +73,11 @@ Hexagonal (ports and adapters), strictly layered:
   `CLI` (shells out to the local `git` binary, restores the base ref and cleans instead of deleting,
   good for local dev/CI where a reusable checkout matters). `Factory` picks the workdir under a root
   via `RepoDirName`. Note the package imports go-git aliased as `gogit` — the package names collide.
-- **`gemini`** — `Reviewer`, the only `review.Reviewer` implementation, wraps `go-gemini-client/gemini`
-  (imported aliased as `geminiclient`, same collision). It decodes the model output into a
-  `review.Report` exactly once; no other layer sees the raw JSON.
-
-There is deliberately **no publisher implementation here**. How a report is represented (JSON, HTML,
-a database row) and where it goes is decided by the consuming app's UI, so shipping one would have
-pulled `go-prompt-kit` / `go-remote-io` / `go-utils` into every consumer for a rendering they may
-not want. Direct dependencies are `go-git` and `go-gemini-client` only — keep it that way.
+There is deliberately **no reviewer or publisher implementation here**. The reviewer decides the
+AI SDK (Gemini via go-gemini-client, ADK, or anything else) and the publisher decides how a report
+is represented and stored — both are the consuming app's choices, so shipping either would force a
+dependency onto every consumer. The former `gemini` package moved to `adk-review`'s
+`internal/adapters` in v1.3.0. Direct dependency is `go-git` only — keep it that way.
 
 ## Working conventions
 
@@ -91,14 +90,16 @@ not want. Direct dependencies are `go-git` and `go-gemini-client` only — keep 
   outside of tests. Prefer table-driven tests with the existing `fake*` types in each package's
   `*_test.go` files over adding new mocking machinery. `git`'s tests build real repositories in
   `t.TempDir()`; the `CLI` ones skip when the `git` binary is absent (`requireGitBinary`).
-- Enum values live in `review` only (`Severities()` / `Decisions()`). `gemini/schema.go` builds the
-  ResponseSchema from them — never hard-code the strings a second time.
+- Enum values live in `review` only (`Severities()` / `Decisions()`). Consumers build their
+  AI output schemas from them (see adk-review's `internal/adapters/gemini_schema.go`) — never
+  hard-code the strings a second time.
 - Wrap errors with `%w`, and attach the step with `review.WrapStep` at the pipeline boundary so
   `errors.Is` and `review.StepOf` both keep working.
 - Keep `README.md`'s package table and project tree in sync with `review`/`pipeline` when adding or
   renaming packages — it's the authoritative architecture reference.
-- This module and `go-gemini-client` are versioned independently (semver tags, no `replace`
-  directive). A breaking change here (e.g. removing/renaming an exported `review` type or a
-  constructor like `git.NewCLIFactory`) requires: commit → tag a new version → bump `go.mod` in
-  `git-gemini-web` → fix its call sites. Don't assume a local edit is visible to that repo until
-  that whole sequence has happened.
+- This module is consumed via semver tags (no `replace` directive). A breaking change here
+  (e.g. removing/renaming an exported `review` type or a constructor like `git.NewCLIFactory`)
+  requires: commit → tag a new version → bump `go.mod` in `adk-review` → fix its call sites.
+  Don't assume a local edit is visible to that repo until that whole sequence has happened.
+  With adk-review as the sole consumer, pragmatic breaking changes within v1 are accepted
+  (v1.3.0 removed the `gemini` package this way).

@@ -12,10 +12,10 @@
 **Go Review Kit** は、「Git の差分を取る → AI にレビューさせる → 結果を保存する → 通知する」を
 1 本のパイプラインとして提供するライブラリです。`main` パッケージは持ちません。
 
-同梱の `gemini` レビュアーは、AI の出力を ResponseSchema で構造を制約したうえで
-`review.Report` へデコードします。自由記述の Markdown に起因する出力の揺れが起きないため、
-コードに限らず Markdown 原稿のレビューなど、プロンプト次第で用途を変えられます。
-エージェント型のレビュアー（`review.WorkspaceReviewer`）を呼び出し側が差し込むこともできます。
+レビュー結果は型付きの `review.Report`（判定・重大度付きの指摘）として受け渡し、
+`ParseReport` / `Validate` で検証します。レビュアーの実体（単発の `review.Reviewer` /
+エージェント型の `review.WorkspaceReviewer`）は呼び出し側が差し込みます。AI SDK には
+依存しないため、コードに限らず Markdown 原稿のレビューなど、実装次第で用途を変えられます。
 
 ### 扱わないこと
 
@@ -23,8 +23,10 @@
 GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決めます。表示の作りに従属する
 決定なので、ライブラリ側に既定を持たせると利用側が要らないレンダリングと依存を抱えます。
 
-同じ理由で、プロンプトの文面（`review.PromptGenerator`）と通知先（`review.Notifier`）も
-呼び出し側が実装します。直接依存は `go-git` と `go-gemini-client` の 2 つだけです。
+同じ理由で、レビュアー（`review.Reviewer` / `review.WorkspaceReviewer`）・プロンプトの文面
+（`review.PromptGenerator`）・通知先（`review.Notifier`）も呼び出し側が実装します。
+どの AI SDK でレビューするかはアプリの選択であり、ライブラリが同梱すると全利用者が
+その SDK を抱えるためです。直接依存は `go-git` だけです。
 
 ---
 
@@ -43,10 +45,10 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
   1〜2 メソッドに絞ってあるため、テストのモックは数行で書けます。
 * **工程が 1 階層:** `pipeline.Run` が唯一の入口で、その下に中間層はありません。
 * **エラーは戻り値:** 失敗は通常の `error` として返り、種類は番兵エラーで判別できます。
-* **レビュアーは 2 系統:** 差分だけで完結する `Reviewer`（本リポジトリの `gemini` が実体）と、
-  Head をチェックアウトした作業ディレクトリを自分で調べられる `WorkspaceReviewer`
-  （エージェント型。実体は呼び出し側が提供）です。`pipeline.Deps` にはどちらか一方だけを
-  設定します。モードごとに使い分けたい場合は、アダプターを共有した Pipeline を 2 つ組みます。
+* **レビュアーは 2 系統:** 差分だけで完結する `Reviewer` と、Head をチェックアウトした
+  作業ディレクトリを自分で調べられる `WorkspaceReviewer`（エージェント型）です。実体は
+  どちらも呼び出し側が提供し、`pipeline.Deps` にはどちらか一方だけを設定します。
+  モードごとに使い分けたい場合は、アダプターを共有した Pipeline を 2 つ組みます。
 
 ---
 
@@ -57,7 +59,6 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
 | **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → (Head チェックアウト) → AI → 保存 → 通知 を制御し、結果を返します。 |
 | **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします。 |
-| | **`gemini`** | `review.Reviewer`（単発）の実体。ResponseSchema で構造化出力を制約します。 |
 
 ```text
 go-review-kit
@@ -68,8 +69,7 @@ go-review-kit
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
 │   └── ports.go     #   Reviewer / WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
-├── git/             # 実装：gogit.go / cli.go / refs.go / auth.go / factory.go
-└── gemini/          # 実装：reviewer.go / schema.go
+└── git/             # 実装：gogit.go / cli.go / refs.go / auth.go / factory.go
 ```
 
 ### `git` の 2 実装の選び分け
@@ -96,25 +96,22 @@ import (
 	"context"
 	"log"
 
-	"github.com/shouni/go-review-kit/gemini"
 	"github.com/shouni/go-review-kit/git"
 	"github.com/shouni/go-review-kit/pipeline"
 	"github.com/shouni/go-review-kit/review"
 )
 
-// publisher / notifier / prompts は呼び出し側の実装です。
+// reviewer / publisher / notifier / prompts は呼び出し側の実装です。
+// レビュアーの実装例（Gemini の構造化出力を review.ParseReport へ通す形）は
+// 利用側リポジトリ adk-review の internal/adapters を参照してください。
 func run(
 	ctx context.Context,
+	reviewer review.Reviewer,
 	publisher review.Publisher,
 	notifier review.Notifier,
 	prompts review.PromptGenerator,
 ) error {
 	sources, err := git.NewGoGitFactory("/var/tmp/reviews", git.WithSSHKey("~/.ssh/id_ed25519"))
-	if err != nil {
-		return err
-	}
-
-	reviewer, err := gemini.New(ctx, gemini.Options{ProjectID: "my-project"})
 	if err != nil {
 		return err
 	}
@@ -217,7 +214,7 @@ sequenceDiagram
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
-    participant AI as Reviewer (gemini) /<br>WorkspaceReviewer (呼び出し側)
+    participant AI as Reviewer /<br>WorkspaceReviewer (呼び出し側)
     participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
