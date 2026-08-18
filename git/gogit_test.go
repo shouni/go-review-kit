@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -174,5 +175,52 @@ func TestGoGitPrepareFailsForUnknownRepo(t *testing.T) {
 
 	if err := source.Prepare(context.Background(), "/nonexistent/repo.git"); err == nil {
 		t.Fatal("エラーを期待しましたが nil でした")
+	}
+}
+
+// シンボリック参照が空のハッシュとして通らないこと。
+//
+// Reference を resolved=false で引くと、origin/HEAD のようなシンボリック参照では
+// Hash() が ZeroHash を返し、**エラー無しで空のハッシュが解決結果になります。**
+func TestGoGitResolveSkipsSymbolicRef(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	source, err := NewGoGit(filepath.Join(t.TempDir(), "work"))
+	if err != nil {
+		t.Fatalf("GoGit の生成に失敗: %v", err)
+	}
+	t.Cleanup(func() { _ = source.Close(context.Background()) })
+
+	if err := source.Prepare(ctx, repo.path); err != nil {
+		t.Fatalf("準備に失敗: %v", err)
+	}
+
+	hash, err := source.resolve("main")
+	if err != nil {
+		t.Fatalf("main を解決できませんでした: %v", err)
+	}
+	if hash.IsZero() {
+		t.Error("空のハッシュが解決結果として返っています")
+	}
+}
+
+// 存在しない参照は ErrRefNotFound として判別できること。
+func TestGoGitResolveReportsNotFound(t *testing.T) {
+	repo := newTestRepo(t)
+	ctx := context.Background()
+
+	source, err := NewGoGit(filepath.Join(t.TempDir(), "work"))
+	if err != nil {
+		t.Fatalf("GoGit の生成に失敗: %v", err)
+	}
+	t.Cleanup(func() { _ = source.Close(context.Background()) })
+
+	if err := source.Prepare(ctx, repo.path); err != nil {
+		t.Fatalf("準備に失敗: %v", err)
+	}
+
+	if _, err := source.resolve("no-such-ref"); !errors.Is(err, review.ErrRefNotFound) {
+		t.Errorf("err = %v, ErrRefNotFound として判別できません", err)
 	}
 }

@@ -28,11 +28,14 @@ const (
 	DecisionNone    Decision = "None"
 )
 
-// Severities は、取りうる重大度を重い順に返します。
+// 列挙値の出どころはこの 4 つだけです。
 //
-// AI の出力スキーマ（gemini）の列挙値と、受信したレポートの検証は、どちらもこの
-// 一箇所を参照します。旧実装はスキーマ側にだけ文字列の配列を持っていたため、値を増やすと
-// 検証側と食い違う余地がありました。
+// 利用側が組み立てる AI の出力スキーマの列挙値と、受信したレポートの検証は、どちらも
+// ここを参照します。**別に写しを持つと、値を足したときに食い違い、モデルはスキーマ上
+// 正当な値を返すのにデコードで弾かれます**（症状は全レビューの失敗です）。
+// AI SDK のスキーマは列挙値を []string で要求するため、文字列版もここで配ります。
+
+// Severities は、取りうる重大度を重い順に返します。
 func Severities() []Severity {
 	return []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
 }
@@ -40,6 +43,25 @@ func Severities() []Severity {
 // Decisions は、取りうる判定を重い順に返します。
 func Decisions() []Decision {
 	return []Decision{DecisionBlocker, DecisionMajor, DecisionMinor, DecisionNone}
+}
+
+// SeverityStrings は、取りうる重大度を文字列で重い順に返します。
+func SeverityStrings() []string {
+	return toStrings(Severities())
+}
+
+// DecisionStrings は、取りうる判定を文字列で重い順に返します。
+func DecisionStrings() []string {
+	return toStrings(Decisions())
+}
+
+// toStrings は、文字列を基底型とする列挙のスライスを []string へ写します。
+func toStrings[T ~string](values []T) []string {
+	out := make([]string, 0, len(values))
+	for _, v := range values {
+		out = append(out, string(v))
+	}
+	return out
 }
 
 // Valid は、既知の重大度かどうかを返します。
@@ -71,8 +93,8 @@ type Finding struct {
 
 // Report は、AI が返すレビュー結果です。
 //
-// 旧実装はこの内容を JSON 文字列のまま層をまたいで受け渡し、公開側で map[string]any へ
-// 再パースしていました。ここでは AI アダプターが一度だけデコードして型を与え、以降は
+// JSON 文字列のまま層をまたいで受け渡さないのは、公開側で map[string]any へ再パースする
+// ことになり、型も検証も失われるためです。AI アダプターが一度だけデコードし、以降は
 // この構造体で扱います。
 type Report struct {
 	Title    string    `json:"title"`

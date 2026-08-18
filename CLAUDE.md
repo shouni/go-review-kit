@@ -13,12 +13,9 @@ It is consumed by the downstream app `adk-review` (Web/Worker), which supplies t
 adapters and owns the process entrypoint.
 
 `README.md` has a 動作の約束 section listing the guarantees callers are allowed to rely on (empty
-diff is not a failure, Publisher only runs on success, Notifier always runs exactly once, publish
-and cleanup detach from the caller's deadline). Those are contract, not incidental behaviour — read
-it before changing `pipeline`.
-
-An older library, `gemini-reviewer-core`, covered the same ground and still exists at its own module
-path. It is **not** kept in sync with this one; do not copy code or API shapes between them.
+diff is not a failure, Publisher only runs on success, Notifier runs exactly once per `Run`, publish
+and notify each detach from the caller's deadline with their own budget). Those are contract, not
+incidental behaviour — read it before changing `pipeline`.
 
 ## Commands
 
@@ -73,6 +70,11 @@ Hexagonal (ports and adapters), strictly layered:
   `CLI` (shells out to the local `git` binary, restores the base ref and cleans instead of deleting,
   good for local dev/CI where a reusable checkout matters). `Factory` picks the workdir under a root
   via `RepoDirName`. Note the package imports go-git aliased as `gogit` — the package names collide.
+  **SSH URLs only** (scp form, `ssh://`, or a local path): auth is SSH-key only, so `Prepare` refuses
+  `http(s)` rather than falling through to anonymous access that fails on anything private.
+  `RepoDirName` appends a hash of the normalized URL — two repositories sharing a workdir means one
+  repository's branch gets reviewed and published as the other's. The package takes **no lock**, so
+  concurrent reviews of the *same* repository need `WithDirNamer` to keep them apart.
 There is deliberately **no reviewer or publisher implementation here**. The reviewer decides the
 AI SDK (Gemini via go-gemini-client, ADK, or anything else) and the publisher decides how a report
 is represented and stored — both are the consuming app's choices, so shipping either would force a
@@ -90,9 +92,14 @@ dependency onto every consumer. The former `gemini` package moved to `adk-review
   outside of tests. Prefer table-driven tests with the existing `fake*` types in each package's
   `*_test.go` files over adding new mocking machinery. `git`'s tests build real repositories in
   `t.TempDir()`; the `CLI` ones skip when the `git` binary is absent (`requireGitBinary`).
-- Enum values live in `review` only (`Severities()` / `Decisions()`). Consumers build their
-  AI output schemas from them (see adk-review's `internal/adapters/gemini_schema.go`) — never
-  hard-code the strings a second time.
+- Enum values live in `review` only (`Severities()` / `Decisions()`, plus the `SeverityStrings()` /
+  `DecisionStrings()` forms the AI SDKs want for a schema `Enum`). Consumers build their output
+  schemas from those — never hard-code the strings a second time, and don't re-derive `[]string`
+  in the consumer either.
+- Timeouts have two knobs and they cover different ranges: `WithRunTimeout` bounds the review
+  itself, `WithPublishTimeout` bounds publish/notify/cleanup, which run on detached contexts.
+  A caller wrapping `Run` in its own deadline defeats the detach — that is what `WithRunTimeout`
+  is for.
 - Wrap errors with `%w`, and attach the step with `review.WrapStep` at the pipeline boundary so
   `errors.Is` and `review.StepOf` both keep working.
 - Keep `README.md`'s package table and project tree in sync with `review`/`pipeline` when adding or

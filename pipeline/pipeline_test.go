@@ -3,6 +3,7 @@ package pipeline
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -391,5 +392,211 @@ func TestRunReturnsNilReportForInvalidRequest(t *testing.T) {
 	}
 	if report != nil {
 		t.Fatalf("Report は nil であるべきです: %+v", report)
+	}
+}
+
+// slowReviewer は、context がキャンセルされるまで待つ review.Reviewer です。
+type slowReviewer struct {
+	sawDeadline bool
+	hadDeadline bool
+}
+
+func (s *slowReviewer) Review(ctx context.Context, _, _ string) (review.Report, error) {
+	_, s.hadDeadline = ctx.Deadline()
+	<-ctx.Done()
+	s.sawDeadline = true
+	return review.Report{}, ctx.Err()
+}
+
+// WithRunTimeout がレビュー本体にだけ締切を掛けること。
+//
+// 呼び出し側が Run へ渡す context に自分で締切を被せると、打ち切られた直後は
+// context が期限切れなので、失敗を報告する通知まで道連れになります。
+// ★ この上限を使えば、打ち切られても通知は届きます。
+func TestRunTimeoutBoundsReviewButNotNotify(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, WithRunTimeout(20*time.Millisecond))
+	slow := &slowReviewer{}
+	h.pipeline.deps.Reviewer = slow
+
+	result, report, err := h.pipeline.Run(context.Background(), testRequest())
+
+	if err == nil {
+		t.Fatal("締切で打ち切られていません")
+	}
+	if !slow.hadDeadline {
+		t.Error("レビュアーへ渡った context に締切がありません")
+	}
+	if report != nil {
+		t.Errorf("打ち切り時に report が返っています: %+v", report)
+	}
+	if result.Status != review.StatusFailed {
+		t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
+	}
+	// ここが要点です。締切に巻き込まれず通知まで届くこと。
+	if got := h.notifier.count(); got != 1 {
+		t.Fatalf("通知回数 = %d, want 1（打ち切りでも失敗通知は届くべきです）", got)
+	}
+}
+
+// 既定は無制限であること。既存の利用者の挙動を変えないための確認です。
+func TestRunTimeoutDefaultsToUnlimited(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	if h.pipeline.runTimeout != 0 {
+		t.Errorf("runTimeout = %v, want 0（無制限）", h.pipeline.runTimeout)
+	}
+
+	probe := &deadlineProbe{report: testReport()}
+	h.pipeline.deps.Reviewer = probe
+	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
+		t.Fatalf("Run が失敗しました: %v", err)
+	}
+	if probe.hadDeadline {
+		t.Error("未設定なのにレビュアーの context へ締切が付いています")
+	}
+}
+
+// 0 以下は無視されること（WithPublishTimeout と同じ規則）。
+func TestRunTimeoutIgnoresNonPositive(t *testing.T) {
+	t.Parallel()
+
+	for _, d := range []time.Duration{0, -time.Second} {
+		h := newHarness(t, WithRunTimeout(d))
+		if h.pipeline.runTimeout != 0 {
+			t.Errorf("WithRunTimeout(%v) で runTimeout = %v, want 0", d, h.pipeline.runTimeout)
+		}
+	}
+}
+
+// deadlineProbe は、渡された context に締切があるかだけを見る review.Reviewer です。
+type deadlineProbe struct {
+	report      review.Report
+	hadDeadline bool
+}
+
+func (d *deadlineProbe) Review(ctx context.Context, _, _ string) (review.Report, error) {
+	_, d.hadDeadline = ctx.Deadline()
+	return d.report, nil
+}
+
+// slowPublisher は、context が切れるまで粘って失敗する review.Publisher です。
+type slowPublisher struct{}
+
+func (slowPublisher) Publish(ctx context.Context, _ review.Request, _ review.Report) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+// ★ 公開が予算を使い切って失敗しても、失敗通知は届くこと。
+//
+// 公開に渡した context をそのまま通知へ回すと、既に期限切れなので通知は必ず失敗します。
+// 「いちばん報告が必要な場面でだけ届かない」という裏返った挙動になるため、
+// 通知には別の予算を与えます。
+func TestPublishTimeoutDoesNotStarveFailureNotify(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, WithPublishTimeout(20*time.Millisecond))
+	h.pipeline.deps.Publisher = slowPublisher{}
+
+	_, report, err := h.pipeline.Run(context.Background(), testRequest())
+	if err == nil {
+		t.Fatal("公開の失敗が返っていません")
+	}
+	// レビュー自体は成立しているので Report は返ります。
+	if report == nil {
+		t.Error("公開に失敗しても Report は返すべきです")
+	}
+
+	if got := h.notifier.count(); got != 1 {
+		t.Fatalf("通知回数 = %d, want 1", got)
+	}
+	if h.notifier.ctxErr != nil {
+		t.Errorf("通知が期限切れの context で行われています: %v", h.notifier.ctxErr)
+	}
+}
+
+// 成功時も、通知が公開と予算を食い合わないこと。
+func TestPublishAndNotifyGetSeparateBudgets(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, WithPublishTimeout(50*time.Millisecond))
+	h.pipeline.deps.Publisher = sleepyPublisher{d: 30 * time.Millisecond}
+
+	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
+		t.Fatalf("Run が失敗しました: %v", err)
+	}
+	if h.notifier.ctxErr != nil {
+		t.Errorf("通知の context が公開に削られています: %v", h.notifier.ctxErr)
+	}
+
+	// 通知に渡った締切が、公開で消費したぶんだけ短くなっていないこと。
+	if remaining := h.notifier.remaining; remaining < 40*time.Millisecond {
+		t.Errorf("通知の残り時間 = %v, 公開と予算を共有しています", remaining)
+	}
+}
+
+// sleepyPublisher は、一定時間かけてから成功する review.Publisher です。
+type sleepyPublisher struct{ d time.Duration }
+
+func (s sleepyPublisher) Publish(ctx context.Context, _ review.Request, _ review.Report) error {
+	select {
+	case <-time.After(s.d):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+// nilSources は、生成に失敗した実装（typed-nil）を模した型です。
+type nilSources struct{}
+
+func (*nilSources) Open(context.Context, review.Request) (review.DiffSource, error) {
+	return nil, nil
+}
+
+// 生成に失敗した実装（nil ポインタ）を渡されたら、起動時に落とすこと。
+//
+// 素の == nil では typed-nil を見逃し、検証を通過したあと最初に呼んだ時点で
+// nil ポインタ参照になります。依存の検証は起動時に落とすためにあります。
+func TestValidateRejectsTypedNilDependency(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	deps := h.pipeline.deps
+	deps.Sources = (*nilSources)(nil)
+
+	_, err := New(deps)
+	if err == nil {
+		t.Fatal("typed-nil の依存が素通りしました")
+	}
+	if !strings.Contains(err.Error(), "Sources") {
+		t.Errorf("エラーに項目名がありません: %v", err)
+	}
+}
+
+// typed-nil の Reviewer は「両方設定」と誤判定しないこと。
+func TestValidateTreatsTypedNilReviewerAsUnset(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	deps := h.pipeline.deps
+	deps.Reviewer = (*deadlineProbe)(nil)
+	deps.WorkspaceReviewer = &fakeWorkspaceReviewer{report: testReport()}
+
+	if _, err := New(deps); err != nil {
+		t.Fatalf("typed-nil の Reviewer が「同時に設定」と誤判定されました: %v", err)
+	}
+}
+
+// nil の Option を渡してもパニックしないこと。
+func TestNewIgnoresNilOption(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	if _, err := New(h.pipeline.deps, nil, WithPublishTimeout(time.Second), nil); err != nil {
+		t.Fatalf("nil Option でエラーになりました: %v", err)
 	}
 }

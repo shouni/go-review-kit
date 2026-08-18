@@ -2,6 +2,7 @@ package review
 
 import (
 	"errors"
+	"slices"
 	"testing"
 )
 
@@ -142,5 +143,45 @@ func TestSeverityAndDecisionValidity(t *testing.T) {
 	}
 	if !DecisionNone.Valid() {
 		t.Error("None は Decision としては有効であるべきです")
+	}
+}
+
+// 文字列版が型付き版の写しであること。
+//
+// AI SDK の出力スキーマは列挙値を []string で要求します。詰め替えが利用側にあると
+// レビュアーの実装ごとに写しが増え、値を足したときにスキーマと検証が食い違います。
+func TestEnumStringsMirrorTypedValues(t *testing.T) {
+	t.Parallel()
+
+	wantSeverities := make([]string, 0, len(Severities()))
+	for _, s := range Severities() {
+		wantSeverities = append(wantSeverities, string(s))
+	}
+	if got := SeverityStrings(); !slices.Equal(got, wantSeverities) {
+		t.Errorf("SeverityStrings() = %v, want %v", got, wantSeverities)
+	}
+
+	wantDecisions := make([]string, 0, len(Decisions()))
+	for _, d := range Decisions() {
+		wantDecisions = append(wantDecisions, string(d))
+	}
+	if got := DecisionStrings(); !slices.Equal(got, wantDecisions) {
+		t.Errorf("DecisionStrings() = %v, want %v", got, wantDecisions)
+	}
+}
+
+// 返したスライスを書き換えられても、次の呼び出しに影響しないこと。
+// 呼び出し側はこれをスキーマへ直接渡すので、共有されていると危険です。
+func TestEnumStringsReturnFreshSlices(t *testing.T) {
+	t.Parallel()
+
+	first := SeverityStrings()
+	if len(first) == 0 {
+		t.Fatal("列挙が空です")
+	}
+	first[0] = "書き換え"
+
+	if second := SeverityStrings(); second[0] == "書き換え" {
+		t.Error("SeverityStrings() が内部のスライスを共有しています")
 	}
 }

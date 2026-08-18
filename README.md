@@ -69,8 +69,25 @@ go-review-kit
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
 │   └── ports.go     #   Reviewer / WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
-└── git/             # 実装：gogit.go / cli.go / refs.go / auth.go / factory.go
+└── git/             # 実装：gogit.go / cli.go / factory.go / options.go / auth.go / refs.go
 ```
+
+### 対応するリポジトリURL — **SSH のみ**
+
+認証は SSH 鍵だけを扱います（`WithSSHKey` → `GIT_SSH_COMMAND` / go-git の `PublicKeys`）。
+受け付けるのは次の形式です。
+
+| 形式 | 例 |
+| :--- | :--- |
+| scp 形式 | `git@github.com:owner/repo.git` |
+| `ssh://` スキーム | `ssh://git@github.com/owner/repo.git` |
+| ローカルパス | `/var/tmp/repos/example`（開発・テスト用） |
+
+**`http(s)` は `Prepare` が明示的に断ります。** 資格情報を渡す経路が無く、公開リポジトリへ
+匿名で繋がるだけなので、対応しているように見えて private では必ず失敗するためです。
+断り方を形式のエラーにしておくと、利用者が「認証に失敗しました」で悩まずに済みます。
+
+同じリポジトリを scp 形式と `ssh://` のどちらで指定しても、同じ作業ディレクトリへ落ち着きます。
 
 ### `git` の 2 実装の選び分け
 
@@ -82,6 +99,13 @@ go-review-kit
 | `git` バイナリ | 不要 | 必要 |
 | `Close` の動作 | 作業ディレクトリごと削除 | 基準参照へ戻して未追跡ファイルを削除 |
 | 向く環境 | Cloud Run 等の使い捨て環境 | チェックアウトを再利用できるローカル・CI |
+
+> **同じリポジトリのレビューを同時に走らせる場合は `WithDirNamer` が要ります。**
+> 既定の作業ディレクトリ名は URL だけから決まるため、同時実行は同じディレクトリを共有します。
+> 本ライブラリは排他を行いません。`GoGit` では先に終わった側が実行中の側のディレクトリを消し、
+> `CLI` では**エラーにならずに別ブランチの内容をレビューします**。実行ごとに異なる名前を
+> 返すようにしてください（チェックアウトの再利用は諦めることになりますが、使い捨ての環境では
+> 元々効きません）。
 
 ---
 
@@ -132,7 +156,7 @@ func run(
 		RepoURL:    "ssh://git@github.com/shouni/example.git",
 		Base:       "main",
 		Head:       "develop",
-		Mode:       "detail",
+		Mode:       "code", // 任意の文字列。意味づけは PromptGenerator の実装が決めます
 		Model:      "gemini-2.5-pro",
 		StorageURI: "gs://bucket/reviews/20260810-213000-a1b2c3d4/report.json",
 		PublicURL:  "https://example.com/history/20260810-213000-a1b2c3d4",
@@ -141,9 +165,13 @@ func run(
 		return err
 	}
 
-	// report はレビューが成立した場合のみ非 nil です。
+	// report はレビューが成立した場合のみ非 nil です。差分が無ければ nil で返ります。
+	findings := 0
+	if report != nil {
+		findings = len(report.Findings)
+	}
 	log.Printf("status=%s published=%v duration=%s findings=%d",
-		result.Status, result.Published(), result.Duration, len(report.Findings))
+		result.Status, result.Published(), result.Duration, findings)
 	return nil
 }
 ```
@@ -158,7 +186,9 @@ switch {
 case errors.Is(err, review.ErrInvalidRequest):
 	// 入力不備
 case errors.Is(err, review.ErrRefNotFound):
-	// ブランチ・コミットが見つからない
+	// ブランチ・コミットが見つからない（再試行しても直らない）
+case errors.Is(err, review.ErrUnsupportedRepoURL):
+	// URL の形式が扱えない（同上。SSH 形式かローカルパスにしてもらう）
 case err != nil:
 	log.Printf("%s で失敗しました: %v", review.StepOf(err), err)
 }
@@ -184,19 +214,26 @@ case err != nil:
   保存に失敗した場合は `Report` が非 nil のままエラーも返るため、「レビューはできたが残せ
   なかった」を区別できます。レビューの中身を使う処理（ジョブ状態の記録など）は、`Notifier`
   を実装するのではなくこの戻り値から組み立ててください。
-* **`Notifier` は外向きの通知のためのものです。** 呼び出し元の締切から切り離して呼ばれるので、
-  レビューが打ち切られた直後でも届きます。逆に言えば、その切り離しが要らない処理をここへ
-  載せる理由はありません。
+* **`Notifier` は外向きの通知のためのものです。** その切り離し（下記）が要らない処理を
+  ここへ載せる理由はありません。レビューの中身を使う処理は `Run` の戻り値から組み立てます。
 * **`Publisher` が呼ばれるのは成功時だけです。** 差分なし・失敗のときは公開する内容が存在しない
   ため、`Notifier` だけが呼ばれます。
-* **`Notifier` は必ず 1 回呼ばれます。** 成功・スキップ・失敗のいずれでも呼ばれ、保存に失敗した
-  場合も呼ばれます。報告がいちばん必要な場面で通知が飛ばない、という状態を作らないためです。
+* **`Notifier` は `Run` 1 回につき必ず 1 回呼ばれます。** 成功・スキップ・失敗のいずれでも呼ばれ、
+  保存に失敗した場合も呼ばれます。報告がいちばん必要な場面で通知が飛ばない、という状態を
+  作らないためです。裏を返すと、**`Run` に入る前に呼び出し側で失敗させた場合は呼ばれません**。
+  レビュアーの選択などを `Run` の外で行う構成では、その経路の通知は呼び出し側の責任です。
 * **通知の失敗はパイプラインを失敗させません。** 成果物は既に保存済みであり、不達を理由に結果を
   失敗へ倒すと再実行の判断を誤らせるためです（記録は残ります）。
-* **保存・通知・後始末は呼び出し元の締切から切り離されます。** レビューは重く、呼び出し元が
-  タイムアウト付きの context を渡すことがあります。そのまま使うと、レビューが締切で打ち切られた
-  直後は context が期限切れなので、失敗を報告する通知や作業ディレクトリの後始末まで道連れで
-  失敗します。上限は `pipeline.WithPublishTimeout` で変更できます。
+* **保存・通知・後始末は呼び出し元の締切から切り離され、それぞれ独立した上限を持ちます。**
+  レビューは重く、呼び出し元がタイムアウト付きの context を渡すことがあります。そのまま使うと、
+  レビューが打ち切られた直後は context が期限切れなので、失敗を報告する通知や後始末まで
+  道連れで失敗します。予算を使い回した場合も同じで、保存が上限まで粘って失敗すると
+  失敗通知が必ず不達になります。**いちばん報告が必要な場面でだけ届かない**、という状態を
+  作らないためです。上限は `pipeline.WithPublishTimeout` で変更できます。
+* **レビュー本体の上限は `pipeline.WithRunTimeout` で設定します（既定は無制限）。**
+  `Run` へ渡す context に自分で締切を被せると上の切り離しより外側に掛かり、打ち切りと同時に
+  通知も落ちます。ジョブキューの応答待ちより短く取っておくと、外側に打ち切られる前に
+  自分から諦めて、失敗を記録・通知してから終われます。
 * **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
   触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
   `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。この構成では

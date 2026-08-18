@@ -1,7 +1,11 @@
 package git
 
 import (
+	"errors"
+	"strings"
 	"testing"
+
+	"github.com/shouni/go-review-kit/review"
 )
 
 // HTTP/HTTPS を先に除外するのが要点です。Basic 認証入りの URL にも @ が含まれるため、
@@ -92,4 +96,91 @@ func TestSSHAuth(t *testing.T) {
 			t.Fatal("エラーを期待しましたが nil でした")
 		}
 	})
+}
+
+// 認証は SSH 鍵だけを扱うため、http(s) は明示的に断ります。
+//
+// 断らないと、private リポジトリでは匿名アクセスになって必ず失敗し、
+// しかもエラーは git 由来の「認証に失敗」なので、形式の問題だと読めません。
+func TestValidateRepoURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantErr string
+	}{
+		{name: "scp 形式", input: "git@github.com:shouni/example.git"},
+		{name: "ssh スキーム", input: "ssh://git@github.com/shouni/example.git"},
+		{name: "ローカルパス", input: "/tmp/repos/example"},
+		{
+			name:    "https は断る",
+			input:   "https://github.com/shouni/example.git",
+			wantErr: "http(s)",
+		},
+		{
+			name:    "http も断る",
+			input:   "http://github.com/shouni/example.git",
+			wantErr: "http(s)",
+		},
+		{
+			// git のオプションと区別できないため拒否します。
+			name:    "ハイフン始まりは断る",
+			input:   "--upload-pack=/bin/echo",
+			wantErr: "オプション",
+		},
+		{name: "空文字は断る", input: "", wantErr: "空"},
+		{name: "空白だけも断る", input: "   ", wantErr: "空"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateRepoURL(tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("通るはずの URL が拒否されました: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("%q が素通りしました", tt.input)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("エラー %q に %q が含まれていません", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+// 形式の誤りは番兵で判別できること。
+//
+// 再試行しても直らない入力の誤りと、再試行で直りうる障害を呼び出し側が分けられるように
+// するためです。工程名（StepError）は「どこで」を示しますが、「直せるのか」は示しません。
+func TestValidateRepoURLIsUnsupportedSentinel(t *testing.T) {
+	t.Parallel()
+
+	for _, input := range []string{"", "  ", "https://github.com/o/r.git", "--upload-pack=x"} {
+		err := validateRepoURL(input)
+		if err == nil {
+			t.Fatalf("%q が素通りしました", input)
+		}
+		if !errors.Is(err, review.ErrUnsupportedRepoURL) {
+			t.Errorf("validateRepoURL(%q) = %v, ErrUnsupportedRepoURL として判別できません", input, err)
+		}
+	}
+}
+
+// 断るエラーメッセージに認証情報を載せないこと。
+func TestValidateRepoURLRedactsCredentials(t *testing.T) {
+	t.Parallel()
+
+	err := validateRepoURL("https://user:ghp_secret@github.com/o/r.git")
+	if err == nil {
+		t.Fatal("https が素通りしました")
+	}
+	if strings.Contains(err.Error(), "ghp_secret") {
+		t.Errorf("エラーに認証情報が載っています: %v", err)
+	}
 }
