@@ -7,9 +7,9 @@ import (
 
 // パイプラインが返す番兵エラーです。呼び出し側は errors.Is で分岐できます。
 //
-// 旧実装は「エラー」と「スキップ」を構造体のフィールド（Error error / IsSkipped bool）で
-// 運んでいましたが、状態が増えるたびにフィールドが増え、errors.Is も効きませんでした。
-// ここでは通常の error として返し、種類は番兵エラーで表現します。
+// 状態を構造体のフィールド（Error / IsSkipped のような形）で運ばないのは、状態が増える
+// たびにフィールドが増えるうえ errors.Is が効かないためです。通常の error として返し、
+// 種類は番兵エラーで表します。
 var (
 	// ErrInvalidRequest は、Request の必須項目が欠けていることを示します。
 	ErrInvalidRequest = errors.New("レビューリクエストが不正です")
@@ -17,7 +17,16 @@ var (
 	// これは失敗ではないため、パイプラインは StatusSkipped の Result と共に nil を返します。
 	ErrEmptyDiff = errors.New("差分が存在しません")
 	// ErrRefNotFound は、指定された参照がリポジトリに存在しないことを示します。
+	//
+	// 「読もうとして失敗した」場合はこれではありません。リポジトリの破損やディスク障害まで
+	// 畳み込むと、利用者へ「そのブランチはありません」と伝えてしまうためです。
 	ErrRefNotFound = errors.New("参照が見つかりません")
+	// ErrUnsupportedRepoURL は、リポジトリURLの形式を扱えないことを示します。
+	//
+	// 入力の誤りであって障害ではないので、再試行しても直りません。利用者へ形式を
+	// 直してもらう案内が要る一方、ネットワーク起因の失敗は再試行で直るため、
+	// 呼び出し側が両者を分けられるように番兵にしています。
+	ErrUnsupportedRepoURL = errors.New("リポジトリURLの形式を扱えません")
 	// ErrEmptyResponse は、AI がエラーを返さずに空の結果を返したことを示します。
 	ErrEmptyResponse = errors.New("AIが空の応答を返しました")
 	// ErrInvalidReport は、AI の出力をレポートとして解釈できなかったことを示します。
@@ -37,8 +46,8 @@ const (
 
 // StepError は、どの工程で失敗したかを保持するエラーです。
 //
-// 旧実装が Outcome.StepName という別フィールドで運んでいた情報を、エラー自身に持たせます。
-// 工程名はエラーと必ず一組で意味を持つため、両者が離れていると取り違えが起きるためです。
+// 工程名を別フィールドではなくエラー自身に持たせます。工程名はエラーと一組でしか
+// 意味を持たないため、両者が離れていると取り違えが起きます。
 type StepError struct {
 	Step string
 	Err  error

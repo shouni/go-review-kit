@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -67,3 +68,16 @@ func expandTilde(path string) (string, error) {
 	}
 	return filepath.Join(current.HomeDir, path[len("~/"):]), nil
 }
+
+// redactURL は、文字列に含まれる URL の認証情報を伏せます。
+//
+// git は失敗時に URL 全体を stderr へ出すため、`https://user:token@host/...` の形で
+// 渡されたリポジトリはトークンごとログとエラーメッセージに載ります。エラーは
+// review.Result のメッセージとして通知にも流れるので、ここで落とします。
+func redactURL(s string) string {
+	return credentialsInURL.ReplaceAllString(s, "://***@")
+}
+
+// credentialsInURL は URL の userinfo 部分（scheme://user:pass@）に一致します。
+// scp 形式（git@host:path）は認証情報を含まないため対象外です。
+var credentialsInURL = regexp.MustCompile(`://[^/@\s]+@`)

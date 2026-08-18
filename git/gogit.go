@@ -51,6 +51,10 @@ func NewGoGit(localPath string, opts ...Option) (*GoGit, error) {
 
 // Prepare は、リポジトリをクローン（既にあればオープン）し、リモートの最新を取得します。
 func (g *GoGit) Prepare(ctx context.Context, repoURL string) error {
+	if err := validateRepoURL(repoURL); err != nil {
+		return err
+	}
+
 	auth, err := sshAuth(repoURL, g.settings.sshKeyPath)
 	if err != nil {
 		return fmt.Errorf("認証情報の構築に失敗しました: %w", err)
@@ -211,34 +215,64 @@ func (g *GoGit) commit(ref string) (*object.Commit, error) {
 }
 
 // resolve は、参照文字列をコミットハッシュへ解決します。
-// 解決できない場合は review.ErrRefNotFound を包んだエラーを返します。
+// 見つからない場合は review.ErrRefNotFound を包んだエラーを返します。
+//
+// ★ 「候補が無かった」と「読もうとして失敗した」を区別します。すべて ErrRefNotFound へ
+// 畳むと、リポジトリの破損やディスク障害まで「参照が見つかりません: main」として出て、
+// **番兵そのものが嘘をつきます。** 不在以外のエラーに当たったら最初の 1 件を返します。
 func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 	if ref == "" {
 		return plumbing.ZeroHash, fmt.Errorf("%w: 参照名が空です", review.ErrRefNotFound)
 	}
 
+	// readErr は、不在以外で最初に当たったエラーです。
+	var readErr error
+	keep := func(err error) {
+		// 不在は「次の候補を試す」理由であって障害ではありません。
+		if errors.Is(err, plumbing.ErrReferenceNotFound) || errors.Is(err, plumbing.ErrObjectNotFound) {
+			return
+		}
+		if readErr == nil {
+			readErr = err
+		}
+	}
+
 	for _, candidate := range refCandidates(ref) {
 		if candidate.isBranch {
 			name := plumbing.NewRemoteReferenceName(remoteName, localBranchName(candidate.ref))
-			if reference, err := g.repo.Reference(name, false); err == nil {
-				return reference.Hash(), nil
+			// resolved=true にします。false だとシンボリック参照（origin/HEAD など）で
+			// Hash() が ZeroHash を返し、**エラー無しで空のハッシュが解決結果として
+			// 通ってしまいます。**
+			reference, err := g.repo.Reference(name, true)
+			if err != nil {
+				keep(err)
+				continue
 			}
-			continue
+			if reference.Hash().IsZero() {
+				continue
+			}
+			return reference.Hash(), nil
 		}
 
 		// ^{commit} を付けることで、アノテートタグもコミットまで剥がして解決します。
 		hash, err := g.repo.ResolveRevision(plumbing.Revision(candidate.ref + "^{commit}"))
 		if err != nil {
+			keep(err)
 			hash, err = g.repo.ResolveRevision(plumbing.Revision(candidate.ref))
 			if err != nil {
+				keep(err)
 				continue
 			}
 		}
 		if _, err := g.repo.CommitObject(*hash); err != nil {
+			keep(err)
 			continue
 		}
 		return *hash, nil
 	}
 
+	if readErr != nil {
+		return plumbing.ZeroHash, fmt.Errorf("参照の解決に失敗しました (%s): %w", ref, readErr)
+	}
 	return plumbing.ZeroHash, fmt.Errorf("%w: %s", review.ErrRefNotFound, ref)
 }

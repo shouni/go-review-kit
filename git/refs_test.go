@@ -3,6 +3,7 @@ package git
 import (
 	"os/user"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -143,5 +144,70 @@ func TestExpandTilde(t *testing.T) {
 				t.Errorf("expandTilde(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+// git は失敗時に URL 全体を stderr へ出すため、認証情報が混じっているとエラー
+// メッセージ経由でログと通知に流れます。伏せられることを確かめます。
+func TestRedactURL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "トークン付き https",
+			input: "fatal: repository 'https://user:ghp_secret@github.com/o/r/' not found",
+			want:  "fatal: repository 'https://***@github.com/o/r/' not found",
+		},
+		{
+			name:  "ユーザ名のみ",
+			input: "https://someone@example.com/o/r",
+			want:  "https://***@example.com/o/r",
+		},
+		{
+			name:  "認証情報なしは変えない",
+			input: "https://github.com/o/r",
+			want:  "https://github.com/o/r",
+		},
+		{
+			// scp 形式は認証情報を含まないので、そのままにします。
+			name:  "scp 形式は変えない",
+			input: "git@github.com:o/r.git",
+			want:  "git@github.com:o/r.git",
+		},
+		{
+			name:  "空文字",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := redactURL(tt.input); got != tt.want {
+				t.Errorf("redactURL(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// clean は無視ファイルとネストした git リポジトリまで落とすこと。
+// これらが残ると、前回の残骸が head の内容としてレビュアーに読まれます。
+func TestCleanArgsRemoveIgnoredAndNested(t *testing.T) {
+	t.Parallel()
+
+	joined := strings.Join(cleanArgs, " ")
+	for _, want := range []string{"clean", "-d", "-x"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("clean の引数に %q がありません: %v", want, cleanArgs)
+		}
+	}
+	// ネストした git リポジトリを消すには -f が 2 つ必要です。
+	if n := strings.Count(joined, "-f"); n < 2 {
+		t.Errorf("-f が %d 個です。ネストした git リポジトリを消すには 2 つ要ります: %v", n, cleanArgs)
 	}
 }

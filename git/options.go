@@ -9,6 +9,8 @@
 package git
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -33,6 +35,11 @@ func newSettings(opts ...Option) (settings, error) {
 		dirNamer:     RepoDirName,
 	}
 	for _, opt := range opts {
+		// 条件付きでオプションを組み立てる呼び出し側は nil を混ぜがちです。
+		// パニックさせるほどの誤りではないので読み飛ばします。
+		if opt == nil {
+			continue
+		}
 		if err := opt(&s); err != nil {
 			return settings{}, err
 		}
@@ -42,9 +49,8 @@ func newSettings(opts ...Option) (settings, error) {
 
 // Option はアダプターおよび Factory の任意設定です。
 //
-// 旧実装は Configurable インターフェースと SetBaseBranch というセッター経由で設定して
-// いましたが、設定のたびに公開フィールドを書き換えられる状態になっていました。ここでは
-// 生成時にだけ適用し、以降アダプターの設定は変わりません。検証が必要な値を扱えるよう
+// 生成時にだけ適用し、以降アダプターの設定は変わりません。セッターで後から書き換え
+// られると、実行中に設定が変わりうる状態になります。検証が必要な値を扱えるよう
 // error を返す形にしています。
 type Option func(*settings) error
 
@@ -110,8 +116,17 @@ func RepoDirName(repoURL string) string {
 	if idx := strings.Index(name, "://"); idx >= 0 {
 		name = name[idx+len("://"):]
 	}
-	if idx := strings.LastIndex(name, "@"); idx >= 0 {
-		name = name[idx+1:]
+	// 認証情報はホストの前にしか現れないので、最初の "/" より手前の "@" だけを見ます。
+	// LastIndex や Index で丸ごと探すと、パス側の "@"（例: owner/repo@v2）を認証情報と
+	// 誤認して、ホスト名ごと捨てた "v2" のような名前になり、別リポジトリと衝突します。
+	if slash := strings.Index(name, "/"); slash != 0 {
+		host := name
+		if slash > 0 {
+			host = name[:slash]
+		}
+		if at := strings.Index(host, "@"); at >= 0 {
+			name = name[at+1:]
+		}
 	}
 	name = strings.TrimSuffix(name, ".git")
 
@@ -127,7 +142,18 @@ func RepoDirName(repoURL string) string {
 
 	cleaned := strings.Trim(b.String(), "-.")
 	if cleaned == "" {
-		return "repo"
+		cleaned = "repo"
 	}
-	return cleaned
+
+	// 畳み込みだけでは別のリポジトリが同じ名前になります
+	// （group/sub/proj と group-sub-proj はどちらも group-sub-proj）。
+	// **同じディレクトリを別リポジトリが奪い合うと、片方のブランチの内容が
+	// もう片方のレビュー結果として公開されます。** 畳み込む前の形から短いハッシュを
+	// 足して区別します。
+	//
+	// ハッシュを取る前に scp 形式の ":" を "/" へ寄せます。同じリポジトリを
+	// git@host:owner/repo と https://host/owner/repo のどちらで指定しても
+	// 同じ作業ディレクトリへ落ち着く性質を保つためです。
+	sum := sha256.Sum256([]byte(strings.ReplaceAll(name, ":", "/")))
+	return cleaned + "-" + hex.EncodeToString(sum[:])[:8]
 }

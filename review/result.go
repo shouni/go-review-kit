@@ -11,9 +11,9 @@ type Status string
 
 // パイプラインの最終状態です。
 //
-// SUCCESS / FAILURE は旧実装と同じ文字列を保っています（受け取り側の表示分岐を壊さないため）。
-// SKIPPED は新設です。旧実装は「差分が無くて何も公開していない」場合も SUCCESS として
-// 返していたため、成果物の有無を呼び出し側が判別できませんでした。
+// **値は受け取り側の表示分岐や保存済みの記録に現れるため、変更できません。**
+// SKIPPED を SUCCESS へ畳まないのは、「差分が無くて何も公開していない」場合と
+// 成果物がある場合を呼び出し側が判別できなくなるためです（Result.Published も参照）。
 const (
 	StatusSucceeded Status = "SUCCESS"
 	StatusSkipped   Status = "SKIPPED"

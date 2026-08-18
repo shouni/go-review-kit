@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/shouni/go-review-kit/review"
 )
@@ -142,6 +143,9 @@ type fakeNotifier struct {
 	mu     sync.Mutex
 	events []review.Notification
 	ctxErr error
+	// remaining は通知時点で context に残っていた時間です。公開と予算を
+	// 食い合っていないことの確認に使います。
+	remaining time.Duration
 }
 
 func (f *fakeNotifier) Notify(ctx context.Context, n review.Notification) error {
@@ -150,6 +154,9 @@ func (f *fakeNotifier) Notify(ctx context.Context, n review.Notification) error 
 
 	f.events = append(f.events, n)
 	f.ctxErr = ctx.Err()
+	if deadline, ok := ctx.Deadline(); ok {
+		f.remaining = time.Until(deadline)
+	}
 	return f.err
 }
 

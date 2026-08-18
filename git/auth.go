@@ -7,13 +7,15 @@ import (
 	"strings"
 
 	"github.com/go-git/go-git/v5/plumbing/transport"
+
 	"github.com/go-git/go-git/v5/plumbing/transport/ssh"
+	"github.com/shouni/go-review-kit/review"
 )
 
 // sshAuth は、リポジトリURLに応じた go-git の認証方式を組み立てます。
 //
-// HTTP/HTTPS の場合は認証なし（nil）を返します。go-git は nil の場合に匿名アクセスを
-// 試みるため、公開リポジトリはそのまま扱えます。
+// SSH 形式でない場合は認証なし（nil）を返します。ここへ来るのはローカルパスだけです
+// （http(s) は validateRepoURL が先に断ります）。
 func sshAuth(repoURL, sshKeyPath string) (transport.AuthMethod, error) {
 	if !isSSHURL(repoURL) {
 		return nil, nil
@@ -49,8 +51,9 @@ func sshAuth(repoURL, sshKeyPath string) (transport.AuthMethod, error) {
 
 // isSSHURL は、リポジトリURLが SSH 形式かどうかを判定します。
 //
-// HTTP/HTTPS を先に除外するのは、Basic 認証入りの URL（https://user@host/...）に @ が
-// 含まれ、scp 形式と取り違えられるためです。
+// http(s) を先に除外するのは、認証情報入りの URL（https://user@host/...）に @ が
+// 含まれ、scp 形式と取り違えられるためです。validateRepoURL が先に断るので通常は
+// 到達しませんが、この関数単体でも正しく判定できるようにしておきます。
 func isSSHURL(repoURL string) bool {
 	if strings.HasPrefix(repoURL, "http://") || strings.HasPrefix(repoURL, "https://") {
 		return false
@@ -79,4 +82,35 @@ func sshUsername(repoURL string) (string, error) {
 	}
 
 	return "", fmt.Errorf("未対応のSSHリポジトリURL形式です: %s", repoURL)
+}
+
+// validateRepoURL は、このパッケージが扱えるリポジトリURLかを確かめます。
+//
+// **認証は SSH 鍵だけを扱います**（WithSSHKey → GIT_SSH_COMMAND / go-git の PublicKeys）。
+// http(s) には資格情報を渡す経路が無く、公開リポジトリへ匿名で繋がるだけなので、
+// 「対応しているように見えて private では必ず失敗する」状態になります。ここで
+// 明示的に断り、利用者が形式を直せるようにします。
+//
+// 受け付けるのは SSH 形式（git@host:owner/repo.git、ssh://[user@]host/path）と、
+// ローカルパスです。ローカルパスは開発とテストで使います。
+func validateRepoURL(repoURL string) error {
+	trimmed := strings.TrimSpace(repoURL)
+	if trimmed == "" {
+		return fmt.Errorf("%w: リポジトリURLが空です", review.ErrUnsupportedRepoURL)
+	}
+
+	// "-" 始まりは git のオプションとして解釈されうるため拒否します。
+	// 正当なリポジトリURLがこの形になることはありません。
+	if strings.HasPrefix(trimmed, "-") {
+		return fmt.Errorf("%w: %q で始まる値はオプションと区別できません", review.ErrUnsupportedRepoURL, "-")
+	}
+
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		return fmt.Errorf(
+			"%w: http(s) は未対応です（認証は SSH 鍵のみを扱います）。"+
+				"git@host:owner/repo.git または ssh://host/owner/repo.git の形式を使ってください: %s",
+			review.ErrUnsupportedRepoURL, redactURL(trimmed))
+	}
+
+	return nil
 }

@@ -4,10 +4,9 @@ import "context"
 
 // DiffSource は、レビュー対象の差分を取り出せる状態になったリポジトリを表します。
 //
-// 旧実装の GitService は CloneOrUpdate / Fetch / CheckRefExists / GetCodeDiff / Cleanup の
-// 5 メソッドを持ち、その呼び出し順序をオーケストレーター側が知っている必要がありました。
-// 順序は Git 実装の都合であってワークフローの関心ではないため、準備は DiffSourceFactory へ、
-// 参照の解決は Diff の内側へ寄せ、ここでは 2 メソッドに絞っています。
+// 2 メソッドに絞ってあるのは、clone・fetch・参照解決といった手順の順序が Git 実装の
+// 都合であってワークフローの関心ではないからです。準備は DiffSourceFactory が、参照の
+// 解決は Diff の内側が引き受けるので、パイプラインは順序を知らずに済みます。
 type DiffSource interface {
 	// Diff は base と head の間の差分を返します。
 	// 参照が存在しない場合は ErrRefNotFound を包んだエラーを返します。
