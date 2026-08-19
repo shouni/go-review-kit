@@ -104,6 +104,11 @@ type Report struct {
 }
 
 // ParseReport は、AI が返した JSON を Report へデコードし、検証します。
+//
+// そのまま解釈できなかった場合にかぎり SanitizeJSON を通してもう一度試します。
+// 構造化出力を指定してもモデルはフェンスや後書き、エスケープし忘れたバックスラッシュを
+// 混ぜることがあり、**応答を返しきったあとの崩れなので API の再試行では直りません。**
+// 補修しても解釈できなければ、元の入力に対するエラーをそのまま返します。
 func ParseReport(data []byte) (Report, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return Report{}, ErrEmptyResponse
@@ -111,7 +116,15 @@ func ParseReport(data []byte) (Report, error) {
 
 	var report Report
 	if err := json.Unmarshal(data, &report); err != nil {
-		return Report{}, fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
+		cleaned := SanitizeJSON(data)
+		if len(cleaned) == len(data) && string(cleaned) == string(data) {
+			return Report{}, fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
+		}
+		if err2 := json.Unmarshal(cleaned, &report); err2 != nil {
+			// 補修後のエラーではなく元のエラーを返します。呼び出し側が見たいのは
+			// モデルが実際に返したものの壊れ方で、補修の途中経過ではありません。
+			return Report{}, fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
+		}
 	}
 
 	if err := report.Validate(); err != nil {
