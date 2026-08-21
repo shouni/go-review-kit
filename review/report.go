@@ -152,6 +152,38 @@ func (r Report) Validate() error {
 	return nil
 }
 
+// SortFindings は、指摘を重大度の重い順に並べ替えます。
+//
+// プロンプトでモデルに重い順を指示することはできますが、守られる保証はありません。
+// 並びは読む人の目に最初に入るものを決めるので、**受け取った側で確定させます。**
+//
+// 同じ重大度の中では元の順序を保ちます。モデルはたいていファイル順・行順に並べており、
+// その中での読みやすさを崩す理由が無いためです。
+//
+// 重さの定義は Severities() の並びです。**呼び出し側で順位表を持たないでください。**
+// 重大度を足したときに、こちらだけ直して食い違います。
+func (r *Report) SortFindings() {
+	order := Severities()
+	rank := make(map[Severity]int, len(order))
+	for i, severity := range order {
+		rank[severity] = i
+	}
+
+	// 未知の重大度は末尾へ回します。Validate を通っていれば現れませんが、
+	// 検証前に呼ばれても並びが壊れないようにします。
+	unknown := len(order)
+	rankOf := func(s Severity) int {
+		if i, ok := rank[s]; ok {
+			return i
+		}
+		return unknown
+	}
+
+	slices.SortStableFunc(r.Findings, func(a, b Finding) int {
+		return rankOf(a.Severity) - rankOf(b.Severity)
+	})
+}
+
 // Count は、指定した重大度の指摘件数を返します。通知の文面などに利用できます。
 func (r Report) Count(severity Severity) int {
 	n := 0

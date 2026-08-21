@@ -2,6 +2,7 @@ package review
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -13,6 +14,7 @@ import (
 //   - Markdown のフェンス（```json … ```）で包む
 //   - 完結した JSON の後ろに説明文や余分な閉じ括弧を継ぎ足す
 //   - 文字列の中でバックスラッシュをエスケープし忘れる（ソースを引用したとき）
+//   - 文字列の中に改行やタブを生のまま入れる（複数行を引用したとき）
 //
 // **既に解釈できる入力は 1 バイトも変えません。** 補修しても妥当な JSON にならなければ
 // 入力をそのまま返します。呼び出し側のエラーメッセージが元の壊れ方を指したままになるよう、
@@ -29,8 +31,11 @@ func SanitizeJSON(data []byte) []byte {
 	}
 
 	// 文字列の中の壊れたエスケープは、括弧の対応では直りません。
-	// バックスラッシュを補ってからもう一度、値の切り出しを試みます。
-	escaped := escapeLoneBackslashes(data)
+	// バックスラッシュと生の制御文字を補ってからもう一度、値の切り出しを試みます。
+	//
+	// 順序に意味があります。制御文字の補修は `\n` のようにバックスラッシュを**足す**ので、
+	// 後から裸のバックスラッシュを探すと、足したばかりのエスケープを二重にしてしまいます。
+	escaped := escapeControlChars(escapeLoneBackslashes(data))
 	if json.Valid(escaped) {
 		return escaped
 	}
@@ -122,6 +127,76 @@ func escapeLoneBackslashes(data []byte) []byte {
 		}
 	}
 	return []byte(b.String())
+}
+
+// escapeControlChars は、文字列リテラルの中に生のまま置かれた制御文字を
+// エスケープ表記へ置き換えます。
+//
+// JSON は文字列の中に U+0020 未満の文字をそのまま置くことを許しません。にもかかわらず
+// モデルは、**複数行の引用（excerpt）やインデントを含むコードを貼るときに生の改行・タブを
+// 入れてきます。** 構造化出力を指定していても起こり、応答を返しきったあとの崩れなので
+// API の再試行では直りません。ここで直さないと、数分から十数分かけたレビューが
+// 「解釈できません」の一行だけを残して丸ごと失われます。
+//
+// 置き換えは一意です。生の制御文字はその位置に現れてはいけない文字なので、エスケープ表記へ
+// 写しても意味は変わらず、解釈が二通りになることもありません。文字列の外は触りません
+// （JSON の整形に使われた改行やインデントを壊さないためです）。
+func escapeControlChars(data []byte) []byte {
+	var b strings.Builder
+	b.Grow(len(data))
+
+	inString := false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+
+		if !inString {
+			if c == '"' {
+				inString = true
+			}
+			b.WriteByte(c)
+			continue
+		}
+
+		switch {
+		case c == '"':
+			inString = false
+			b.WriteByte(c)
+		case c == '\\':
+			// 正しいエスケープは 2 バイトまとめて通します。1 バイトずつ見ると、
+			// `\"` の引用符を文字列の終わりと誤認して以降の判定がずれます。
+			b.WriteByte(c)
+			if i+1 < len(data) && isJSONEscape(data[i+1]) {
+				b.WriteByte(data[i+1])
+				i++
+			}
+		case c < 0x20:
+			b.WriteString(controlEscape(c))
+		default:
+			b.WriteByte(c)
+		}
+	}
+	return []byte(b.String())
+}
+
+// controlEscape は、制御文字に対する JSON のエスケープ表記を返します。
+//
+// 短い表記があるものはそちらを使います。ログや成果物を人が読むことがあるので、
+// 改行が `\u000a` として並ぶより `\n` の方が読めます。
+func controlEscape(c byte) string {
+	switch c {
+	case '\n':
+		return `\n`
+	case '\r':
+		return `\r`
+	case '\t':
+		return `\t`
+	case '\b':
+		return `\b`
+	case '\f':
+		return `\f`
+	default:
+		return fmt.Sprintf(`\u%04x`, c)
+	}
 }
 
 // isJSONEscape は、バックスラッシュの直後に置ける文字かどうかを返します。
