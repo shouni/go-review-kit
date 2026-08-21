@@ -185,3 +185,44 @@ func TestEnumStringsReturnFreshSlices(t *testing.T) {
 		t.Error("SeverityStrings() が内部のスライスを共有しています")
 	}
 }
+
+// 指摘は重大度の重い順に並ぶこと。同じ重大度の中では元の順序を保つこと
+// （モデルが並べたファイル順・行順を崩さないため）。
+func TestReportSortFindings(t *testing.T) {
+	t.Parallel()
+
+	report := Report{Findings: []Finding{
+		{Severity: SeverityMinor, File: "a.go"},
+		{Severity: SeverityBlocker, File: "b.go"},
+		{Severity: SeverityMinor, File: "c.go"},
+		{Severity: "Unknown", File: "d.go"},
+		{Severity: SeverityMajor, File: "e.go"},
+	}}
+	report.SortFindings()
+
+	want := []string{"b.go", "e.go", "a.go", "c.go", "d.go"}
+	for i, file := range want {
+		if report.Findings[i].File != file {
+			t.Fatalf("findings[%d].File = %q, want %q（順序: %v）", i, report.Findings[i].File, file, files(report))
+		}
+	}
+}
+
+// 指摘が無くても落ちないこと。
+func TestReportSortFindingsOnEmpty(t *testing.T) {
+	t.Parallel()
+
+	report := Report{}
+	report.SortFindings()
+	if len(report.Findings) != 0 {
+		t.Errorf("findings = %d, want 0", len(report.Findings))
+	}
+}
+
+func files(r Report) []string {
+	out := make([]string, 0, len(r.Findings))
+	for _, f := range r.Findings {
+		out = append(out, f.File)
+	}
+	return out
+}
