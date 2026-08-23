@@ -47,8 +47,8 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 * **工程が 1 階層:** `pipeline.Run` が唯一の入口で、その下に中間層はありません。
 * **エラーは戻り値:** 失敗は通常の `error` として返り、種類は番兵エラーで判別できます。
 * **レビュアーは 2 系統:** 差分だけで完結する `Reviewer` と、Head をチェックアウトした
-  作業ディレクトリを自分で調べられる `WorkspaceReviewer`（エージェント型）です。実体は
-  どちらも呼び出し側が提供し、`pipeline.Deps` にはどちらか一方だけを設定します。
+  作業ディレクトリを自分で調べられる `WorkspaceReviewer`（エージェント型）です。
+  `pipeline.Deps` にはどちらか一方だけを設定します。
   モードごとに使い分けたい場合は、`Prompts` 以外のアダプターを共有した Pipeline を 2 つ
   組みます。**`Prompts` を共有してはいけません。** プロンプトは実行するレビュアーに何が
   できるかを説明するものなので、差分しか読めない `Reviewer` にエージェント向けの
@@ -130,8 +130,8 @@ import (
 )
 
 // reviewer / publisher / notifier / prompts は呼び出し側の実装です。
-// レビュアーの実装例（Gemini の構造化出力を review.ParseReport へ通す形）は
-// 利用側リポジトリ adk-review の internal/adapters を参照してください。
+// 実装例は利用側リポジトリ adk-review にあります（レビュアーは internal/adkagent、
+// 保存・通知・プロンプトは internal/adapters）。
 func run(
 	ctx context.Context,
 	reviewer review.Reviewer,
@@ -227,9 +227,8 @@ case err != nil:
 * **`Run` はレビュー結果（`*Report`）も返します。** レビューが成立した場合のみ非 nil です。
   保存に失敗した場合は `Report` が非 nil のままエラーも返るため、「レビューはできたが残せ
   なかった」を区別できます。レビューの中身を使う処理（ジョブ状態の記録など）は、`Notifier`
-  を実装するのではなくこの戻り値から組み立ててください。
-* **`Notifier` は外向きの通知のためのものです。** その切り離し（下記）が要らない処理を
-  ここへ載せる理由はありません。レビューの中身を使う処理は `Run` の戻り値から組み立てます。
+  を実装するのではなくこの戻り値から組み立ててください。**`Notifier` は外向きの通知のための
+  もので**、締切の切り離し（下記）が要らない処理をそこへ載せる理由はありません。
 * **`Publisher` が呼ばれるのは成功時だけです。** 差分なし・失敗のときは公開する内容が存在しない
   ため、`Notifier` だけが呼ばれます。
 * **`Notifier` は `Run` 1 回につき必ず 1 回呼ばれます。** 成功・スキップ・失敗のいずれでも呼ばれ、
@@ -248,11 +247,14 @@ case err != nil:
   `Run` へ渡す context に自分で締切を被せると上の切り離しより外側に掛かり、打ち切りと同時に
   通知も落ちます。ジョブキューの応答待ちより短く取っておくと、外側に打ち切られる前に
   自分から諦めて、失敗を記録・通知してから終われます。
+* **作業ディレクトリはレビューを終えた時点で解放されます（保存より前です）。**
+  `DiffSource.Close` はレビューを抜けた直後に走るため、`Publisher` から作業ツリーを読むことは
+  できません（`GoGit` はここでディレクトリごと削除します）。保存したい内容は `Report` に
+  載せてください。
 * **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
   触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
   `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。この構成では
-  `DiffSourceFactory` が返す `DiffSource` は `review.WorkspaceProvider` を満たす必要があります
-  （`git` パッケージの 2 実装はどちらも満たします）。
+  `DiffSourceFactory` が返す `DiffSource` は `review.WorkspaceProvider` を満たす必要があります。
 
 ---
 
@@ -278,6 +280,7 @@ sequenceDiagram
     DS-->>PL: patch
 
     alt 差分なし
+        PL->>DS: Close(ctx)
         PL->>NT: Notify(StatusSkipped)
         PL-->>App: Result{SKIPPED}, nil, nil
     else 差分あり
@@ -292,6 +295,7 @@ sequenceDiagram
             PL->>AI: ReviewWorkspace(ctx, model, prompt, ws)
         end
         AI-->>PL: review.Report
+        PL->>DS: Close(ctx)
 
         PL->>PB: Publish(ctx, req, report)
         PB-->>PL: ok
@@ -299,28 +303,9 @@ sequenceDiagram
         PL-->>App: Result{SUCCESS}, Report, nil
     end
 
+    Note over PL,NT: どの工程で失敗しても Notify は 1 回だけ呼ばれ、<br/>Result{FAILURE} と工程名付きのエラーが返ります
     Note over PL,NT: Publish / Notify / Close は呼び出し元の締切から切り離して実行
 ```
-
----
-
-## 🛠 開発 (Development)
-
-```bash
-go build ./...
-go test -race ./...
-go vet ./...
-gofmt -l .
-
-# Lint（CI と同じピン留めバージョン）
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run ./...
-
-# 脆弱性チェック
-go run golang.org/x/vuln/cmd/govulncheck@latest ./...
-```
-
-CI（`.github/workflows/ci.yml`）は `main` / `develop` への push と PR で、Build & Test・Lint・
-govulncheck を別ジョブとして実行します。
 
 ---
 
