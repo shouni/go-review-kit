@@ -76,10 +76,10 @@ Hexagonal (ports and adapters), strictly layered:
   repository's branch gets reviewed and published as the other's. The package takes **no lock**, so
   concurrent reviews of the *same* repository need `WithDirNamer` to keep them apart.
 There is deliberately **no reviewer or publisher implementation here**. The reviewer decides the
-AI SDK (Gemini via go-gemini-client, ADK, or anything else) and the publisher decides how a report
-is represented and stored — both are the consuming app's choices, so shipping either would force a
-dependency onto every consumer. The former `gemini` package moved to `adk-review`'s
-`internal/adapters` in v1.3.0. Direct dependency is `go-git` only — keep it that way.
+AI SDK (ADK, a raw SDK client, or anything else) and the publisher decides how a report is
+represented and stored — both are the consuming app's choices, so shipping either would force a
+dependency onto every consumer. The former `gemini` package was removed in v1.3.0 and reviewers
+have lived in the consuming app ever since. Direct dependency is `go-git` only — keep it that way.
 
 ## Working conventions
 
@@ -102,8 +102,9 @@ dependency onto every consumer. The former `gemini` package moved to `adk-review
   is for.
 - Wrap errors with `%w`, and attach the step with `review.WrapStep` at the pipeline boundary so
   `errors.Is` and `review.StepOf` both keep working.
-- Keep `README.md`'s package table and project tree in sync with `review`/`pipeline` when adding or
-  renaming packages — it's the authoritative architecture reference.
+- Keep `README.md`'s package table, project tree, and sequence diagram in sync with
+  `review`/`pipeline` — it's the authoritative architecture reference. The diagram is easy to let
+  drift: `DiffSource.Close` runs on `produce`'s defer, so it fires *before* publish, not after.
 - This module is consumed via semver tags (no `replace` directive). A breaking change here
   (e.g. removing/renaming an exported `review` type or a constructor like `git.NewCLIFactory`)
   requires: commit → tag a new version → bump `go.mod` in `adk-review` → fix its call sites.

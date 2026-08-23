@@ -27,6 +27,16 @@ const DefaultPublishTimeout = 2 * time.Minute
 // 順序を取り違えてもコンパイルが通ってしまうためです。
 type Deps struct {
 	Sources review.DiffSourceFactory
+	// Prompts は、モードと差分から AI へ送るプロンプトを組み立てます。
+	//
+	// **Reviewer と WorkspaceReviewer で Pipeline を 2 つ組む場合、ここだけは
+	// 共有しないでください。** プロンプトは、実行するレビュアーに何ができるかを
+	// 説明するものです。差分しか読めない Reviewer に「ファイルを開いて確認しろ」
+	// 「確認した根拠を挙げろ」と書いたプロンプトを渡すと、確認する手段が無いまま
+	// 根拠を求めることになり、モデルはそれを捏造して埋めます。
+	//
+	// Generate はモードと差分しか受け取らないため、レビュアーの違いは
+	// **生成器そのものを分けて**表してください。
 	Prompts review.PromptGenerator
 	// Reviewer は、差分だけで完結する単発のレビュアーです。
 	// WorkspaceReviewer とはどちらか一方だけを設定します。
@@ -35,7 +45,8 @@ type Deps struct {
 	// 設定する場合、Sources が返す DiffSource は review.WorkspaceProvider を満たす
 	// 必要があります（git パッケージの 2 実装はどちらも満たします）。
 	// レビュアーの使い分けはリクエスト単位ではなくパイプライン単位です。モードごとに
-	// 使い分けたい呼び出し側は、アダプターを共有した Pipeline を 2 つ組んでください。
+	// 使い分けたい呼び出し側は、Prompts 以外のアダプターを共有した Pipeline を 2 つ
+	// 組んでください（Prompts を共有してはいけない理由は同フィールドを参照）。
 	WorkspaceReviewer review.WorkspaceReviewer
 	Publisher         review.Publisher
 	Notifier          review.Notifier
