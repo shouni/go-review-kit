@@ -130,6 +130,103 @@ func TestRunSkipsWhenDiffIsEmpty(t *testing.T) {
 	}
 }
 
+// 上限を超えた差分は、AI へ送る前に失敗させます。送ってしまうと、失敗が分かるのは
+// モデルを呼び終えたあと（出力の途中切れ・締切超過）になり、いちばんコストを払った
+// あとで落ちることになります。
+func TestRunFailsWhenDiffIsTooLarge(t *testing.T) {
+	h := newHarness(t, WithMaxDiffBytes(16))
+	h.source.diff = strings.Repeat("a", 17)
+
+	result, report, err := h.pipeline.Run(context.Background(), testRequest())
+	if !errors.Is(err, review.ErrDiffTooLarge) {
+		t.Fatalf("err = %v, want review.ErrDiffTooLarge", err)
+	}
+	if step := review.StepOf(err); step != review.StepDiff {
+		t.Errorf("StepOf(err) = %q, want %q", step, review.StepDiff)
+	}
+	if report != nil {
+		t.Error("レビューしていないのに Report が返っています")
+	}
+	if result.Status != review.StatusFailed {
+		t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
+	}
+
+	// 上限は「送る前に落とす」ためのものなので、プロンプト生成にも到達しません。
+	if h.prompts.gotDiff != "" {
+		t.Error("上限を超えたのにプロンプトが組み立てられています")
+	}
+	if h.reviewer.called {
+		t.Error("上限を超えたのに AI が呼ばれています")
+	}
+	if h.publisher.called {
+		t.Error("上限を超えたのに公開が行われています")
+	}
+	if !h.source.wasClosed() {
+		t.Error("差分取得元が解放されていません")
+	}
+
+	// スキップではなく失敗なので、通知にはエラーが載ります。載らないと利用者は
+	// 範囲を絞るという手を打てません。
+	if n := h.notifier.count(); n != 1 {
+		t.Fatalf("通知回数 = %d, want 1", n)
+	}
+	if last := h.notifier.last(t); !errors.Is(last.Err, review.ErrDiffTooLarge) {
+		t.Errorf("通知の Err = %v, want review.ErrDiffTooLarge", last.Err)
+	}
+}
+
+// 上限ちょうどは通します。境界を外すと、上限を実測から決めた利用側で
+// 「その値ちょうどの差分だけが理由もなく落ちる」という形になります。
+func TestMaxDiffBytesBoundary(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int
+		wantErr bool
+	}{
+		{"上限ちょうど", 16, false},
+		{"1 バイト超過", 17, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t, WithMaxDiffBytes(16))
+			h.source.diff = strings.Repeat("a", tt.size)
+
+			_, _, err := h.pipeline.Run(context.Background(), testRequest())
+			if got := errors.Is(err, review.ErrDiffTooLarge); got != tt.wantErr {
+				t.Fatalf("ErrDiffTooLarge = %v, want %v (err: %v)", got, tt.wantErr, err)
+			}
+			if h.reviewer.called == tt.wantErr {
+				t.Errorf("reviewer.called = %v", h.reviewer.called)
+			}
+		})
+	}
+}
+
+// 既定は無制限です。上限を持つかどうかは利用側の判断なので、ライブラリが勝手に
+// 数字を決めると、設定していない呼び出し側の挙動が黙って変わります。
+func TestMaxDiffBytesDefaultsToUnlimited(t *testing.T) {
+	h := newHarness(t)
+	if h.pipeline.maxDiffBytes != 0 {
+		t.Errorf("maxDiffBytes = %d, want 0（無制限）", h.pipeline.maxDiffBytes)
+	}
+
+	h.source.diff = strings.Repeat("a", 1<<20)
+	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
+		t.Fatalf("未設定なら大きさで落ちてはいけません: %v", err)
+	}
+}
+
+// 0 以下は無視されること（WithRunTimeout / WithPublishTimeout と同じ規則）。
+func TestMaxDiffBytesIgnoresNonPositive(t *testing.T) {
+	for _, n := range []int{0, -1} {
+		h := newHarness(t, WithMaxDiffBytes(n))
+		if h.pipeline.maxDiffBytes != 0 {
+			t.Errorf("WithMaxDiffBytes(%d) で maxDiffBytes = %d, want 0", n, h.pipeline.maxDiffBytes)
+		}
+	}
+}
+
 func TestRunFailures(t *testing.T) {
 	tests := []struct {
 		name        string
