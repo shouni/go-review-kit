@@ -9,8 +9,6 @@ import (
 // Status は、レビューパイプラインの最終状態です。
 type Status string
 
-// パイプラインの最終状態です。
-//
 // **値は受け取り側の表示分岐や保存済みの記録に現れるため、変更できません。**
 // SKIPPED を SUCCESS へ畳まないのは、「差分が無くて何も公開していない」場合と
 // 成果物がある場合を呼び出し側が判別できなくなるためです（Result.Published も参照）。
@@ -32,8 +30,10 @@ type Result struct {
 // Published は、成果物がストレージへ公開されたかどうかを返します。
 func (r Result) Published() bool { return r.Status == StatusSucceeded }
 
-// resultJSON は Result のワイヤ表現です。所要時間を秒（float64）で出す旧来の形式を保ちつつ、
-// Go 側では time.Duration として扱うために変換をここへ閉じ込めます。
+// resultJSON は Result のワイヤ表現です。
+//
+// 所要時間を秒（float64）で出す形は、保存済みの記録と受け取り側が依存しているため変えられません。
+// Go 側では time.Duration として扱いたいので、変換をここへ閉じ込めます。
 type resultJSON struct {
 	Status          Status  `json:"status"`
 	StorageURI      string  `json:"storage_uri"`

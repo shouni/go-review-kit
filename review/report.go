@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// Severity は、個々の指摘の重大度です。
+// Severity は、個々の指摘の重大度です。全レビューモードで共通のラベルとして扱います。
 type Severity string
 
-// 指摘の重大度です。全レビューモードで共通のラベルとして扱います。
+// 並びがそのまま重さの定義です（Severities / SortFindings が参照します）。
 const (
 	SeverityBlocker Severity = "Blocker"
 	SeverityMajor   Severity = "Major"
@@ -20,7 +20,7 @@ const (
 // Decision は、レビュー全体の判定です。Severity に「問題なし」を表す DecisionNone を加えたものです。
 type Decision string
 
-// レビュー全体の判定です。
+// **値は受け取り側の表示分岐や保存済みの記録に現れるため、変更できません。**
 const (
 	DecisionBlocker Decision = Decision(SeverityBlocker)
 	DecisionMajor   Decision = Decision(SeverityMajor)

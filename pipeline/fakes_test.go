@@ -41,15 +41,28 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeSource は review.DiffSource のテスト実装です。
+// fakeSource は、review.DiffSource と review.WorkspaceProvider のテスト実装です。
+// git パッケージの 2 実装と同じく、両方を満たします。
 type fakeSource struct {
-	diff     string
-	diffErr  error
-	closeErr error
+	diff        string
+	diffErr     error
+	closeErr    error
+	dir         string
+	checkoutErr error
+
+	gotHead string
 
 	mu        sync.Mutex
 	closed    bool
 	closedCtx context.Context
+}
+
+func (f *fakeSource) CheckoutHead(_ context.Context, head string) (string, error) {
+	f.gotHead = head
+	if f.checkoutErr != nil {
+		return "", f.checkoutErr
+	}
+	return f.dir, nil
 }
 
 func (f *fakeSource) Diff(_ context.Context, _, _ string) (string, error) {
@@ -101,7 +114,7 @@ func (f *fakePrompts) Generate(mode, diff string) (string, error) {
 	return f.prompt, nil
 }
 
-// fakeReviewer は review.Reviewer のテスト実装です。
+// fakeReviewer は review.WorkspaceReviewer のテスト実装です。
 type fakeReviewer struct {
 	report review.Report
 	err    error
@@ -109,15 +122,32 @@ type fakeReviewer struct {
 	called    bool
 	gotModel  string
 	gotPrompt string
+	gotWS     review.Workspace
 }
 
-func (f *fakeReviewer) Review(_ context.Context, model, prompt string) (review.Report, error) {
+func (f *fakeReviewer) Review(_ context.Context, model, prompt string, ws review.Workspace) (review.Report, error) {
 	f.called = true
-	f.gotModel, f.gotPrompt = model, prompt
+	f.gotModel, f.gotPrompt, f.gotWS = model, prompt, ws
 	if f.err != nil {
 		return review.Report{}, f.err
 	}
 	return f.report, nil
+}
+
+// bareSource は、review.WorkspaceProvider を満たさない DiffSource です。
+// 能力の欠けた実装を渡された場合の振る舞いを確かめるためだけに使います。
+type bareSource struct {
+	diff string
+}
+
+func (b *bareSource) Diff(context.Context, string, string) (string, error) { return b.diff, nil }
+func (b *bareSource) Close(context.Context) error                          { return nil }
+
+// bareFactory は bareSource を返す review.DiffSourceFactory です。
+type bareFactory struct{ source *bareSource }
+
+func (f *bareFactory) Open(context.Context, review.Request) (review.DiffSource, error) {
+	return f.source, nil
 }
 
 // fakePublisher は review.Publisher のテスト実装です。
@@ -192,7 +222,7 @@ type harness struct {
 func newHarness(t *testing.T, opts ...Option) *harness {
 	t.Helper()
 
-	source := &fakeSource{diff: "diff --git a/main.go b/main.go"}
+	source := &fakeSource{diff: "diff --git a/main.go b/main.go", dir: "/tmp/workdir"}
 	h := &harness{
 		source:    source,
 		factory:   &fakeFactory{source: source},
@@ -203,11 +233,11 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 	}
 
 	p, err := New(Deps{
-		Sources:   h.factory,
-		Prompts:   h.prompts,
-		Reviewer:  h.reviewer,
-		Publisher: h.publisher,
-		Notifier:  h.notifier,
+		Sources:           h.factory,
+		Prompts:           h.prompts,
+		WorkspaceReviewer: h.reviewer,
+		Publisher:         h.publisher,
+		Notifier:          h.notifier,
 	}, append([]Option{WithLogger(discardLogger())}, opts...)...)
 	if err != nil {
 		t.Fatalf("パイプラインの生成に失敗: %v", err)

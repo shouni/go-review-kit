@@ -14,9 +14,9 @@
 1 本のパイプラインとして提供するライブラリです。`main` パッケージは持ちません。
 
 レビュー結果は型付きの `review.Report`（判定・重大度付きの指摘）として受け渡し、
-`ParseReport` / `Validate` で検証します。レビュアーの実体（単発の `review.Reviewer` /
-エージェント型の `review.WorkspaceReviewer`）は呼び出し側が差し込みます。AI SDK には
-依存しないため、コードに限らず Markdown 原稿のレビューなど、実装次第で用途を変えられます。
+`ParseReport` が解釈と検証を引き受けます。レビュアーの実体（`review.WorkspaceReviewer`）は
+呼び出し側が差し込みます。AI SDK には依存しないため、コードに限らず Markdown 原稿の
+レビューなど、実装次第で用途を変えられます。
 
 ### 扱わないこと
 
@@ -24,7 +24,7 @@
 GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決めます。表示の作りに従属する
 決定なので、ライブラリ側に既定を持たせると利用側が要らないレンダリングと依存を抱えます。
 
-同じ理由で、レビュアー（`review.Reviewer` / `review.WorkspaceReviewer`）・プロンプトの文面
+同じ理由で、レビュアー（`review.WorkspaceReviewer`）・プロンプトの文面
 （`review.PromptGenerator`）・通知先（`review.Notifier`）も呼び出し側が実装します。
 どの AI SDK でレビューするかはアプリの選択であり、ライブラリが同梱すると全利用者が
 その SDK を抱えるためです。直接依存は `go-git` だけです。
@@ -46,13 +46,9 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
   1〜2 メソッドに絞ってあるため、テストのモックは数行で書けます。
 * **工程が 1 階層:** `pipeline.Run` が唯一の入口で、その下に中間層はありません。
 * **エラーは戻り値:** 失敗は通常の `error` として返り、種類は番兵エラーで判別できます。
-* **レビュアーは 2 系統:** 差分だけで完結する `Reviewer` と、Head をチェックアウトした
-  作業ディレクトリを自分で調べられる `WorkspaceReviewer`（エージェント型）です。
-  `pipeline.Deps` にはどちらか一方だけを設定します。
-  モードごとに使い分けたい場合は、`Prompts` 以外のアダプターを共有した Pipeline を 2 つ
-  組みます。**`Prompts` を共有してはいけません。** プロンプトは実行するレビュアーに何が
-  できるかを説明するものなので、差分しか読めない `Reviewer` にエージェント向けの
-  プロンプトを渡すと、確認する手段が無いまま根拠を求めることになります。
+* **レビュアーはエージェント型 1 系統:** `WorkspaceReviewer` は Head をチェックアウトした
+  作業ディレクトリを自分で調べられます。差分の外を確認できることが前提なので、
+  「ファイルを開いて確かめろ」「確認した根拠を挙げろ」と書いたプロンプトが常に成立します。
 
 ---
 
@@ -62,7 +58,7 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | :--- | :--- | :--- |
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
 | **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → (Head チェックアウト) → AI → 保存 → 通知 を制御し、結果を返します。 |
-| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします。 |
+| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします（パイプラインが必ず要求します）。 |
 
 ```text
 go-review-kit
@@ -71,7 +67,7 @@ go-review-kit
 │   ├── report.go    #   Report / Verdict / Finding / Severity / Decision
 │   ├── result.go    #   Result / Status（SUCCESS / SKIPPED / FAILURE）
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
-│   └── ports.go     #   Reviewer / WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
+│   └── ports.go     #   WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
 └── git/             # 実装：gogit.go / cli.go / factory.go / options.go / auth.go / refs.go
 ```
@@ -134,7 +130,7 @@ import (
 // 保存・通知・プロンプトは internal/adapters）。
 func run(
 	ctx context.Context,
-	reviewer review.Reviewer,
+	reviewer review.WorkspaceReviewer,
 	publisher review.Publisher,
 	notifier review.Notifier,
 	prompts review.PromptGenerator,
@@ -145,11 +141,11 @@ func run(
 	}
 
 	p, err := pipeline.New(pipeline.Deps{
-		Sources:   sources,
-		Prompts:   prompts,
-		Reviewer:  reviewer,
-		Publisher: publisher,
-		Notifier:  notifier,
+		Sources:           sources,
+		Prompts:           prompts,
+		WorkspaceReviewer: reviewer,
+		Publisher:         publisher,
+		Notifier:          notifier,
 	})
 	if err != nil {
 		return err
@@ -262,8 +258,9 @@ case err != nil:
   載せてください。
 * **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
   触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
-  `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。この構成では
-  `DiffSourceFactory` が返す `DiffSource` は `review.WorkspaceProvider` を満たす必要があります。
+  `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。**`DiffSourceFactory` が返す
+  `DiffSource` は必ず `review.WorkspaceProvider` を満たす必要があり**、満たさない場合は
+  `StepCheckout` の失敗になります。
 
 ---
 
@@ -276,7 +273,7 @@ sequenceDiagram
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
-    participant AI as Reviewer or WorkspaceReviewer (呼び出し側)
+    participant AI as WorkspaceReviewer (呼び出し側)
     participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
@@ -300,13 +297,9 @@ sequenceDiagram
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt
 
-        alt Reviewer 構成（単発）
-            PL->>AI: Review(ctx, model, prompt)
-        else WorkspaceReviewer 構成（エージェント型）
-            PL->>DS: CheckoutHead(ctx, head)
-            DS-->>PL: 作業ディレクトリ（Head の状態）
-            PL->>AI: ReviewWorkspace(ctx, model, prompt, ws)
-        end
+        PL->>DS: CheckoutHead(ctx, head)
+        DS-->>PL: 作業ディレクトリ（Head の状態）
+        PL->>AI: Review(ctx, model, prompt, ws)
         AI-->>PL: review.Report
         PL->>DS: Close(ctx)
 

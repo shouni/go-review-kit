@@ -34,19 +34,12 @@ type Request struct {
 	PublicURL  string `json:"public_url"`     // 閲覧用URL (https://...)
 }
 
-// NewRequest は Request を検証したうえで返します。
-//
-// 検証の本体を Validate に置いているのは、JSON からデコードして組み立てた Request にも
-// 同じ検証を後から適用できるようにするためです。
-func NewRequest(req Request) (Request, error) {
-	if err := req.Validate(); err != nil {
-		return Request{}, err
-	}
-	return req, nil
-}
-
 // Validate は必須項目が埋まっているかを検証し、不足があれば ErrInvalidRequest を包んだ
 // エラーを返します。
+//
+// パイプラインが Run の冒頭で呼ぶため、呼び出し側が事前に呼ぶ必要はありません。
+// メソッドとして公開しているのは、JSON からデコードして組み立てた Request にも
+// 同じ検証を後から適用できるようにするためです。
 //
 // Mode と PublicURL は任意です。Mode の解釈は PromptGenerator の実装次第であり、空を
 // 既定モードとして扱う実装もあり得るためです。PublicURL は結果の閲覧導線でしかなく、

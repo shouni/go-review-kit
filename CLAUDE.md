@@ -5,9 +5,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Overview
 
 Go Review Kit is a library (not a standalone binary) that provides the engine for AI review of git
-diffs: open a repo, extract a diff between two refs, run a caller-supplied reviewer
-(`review.Reviewer` or the workspace-inspecting `review.WorkspaceReviewer`), hand the typed
-`review.Report` to a caller-supplied `review.Publisher`, and notify. Since v1.3.0 the kit ships
+diffs: open a repo, extract a diff between two refs, check out the head, run a caller-supplied
+`review.WorkspaceReviewer` over the worktree, hand the typed `review.Report` to a caller-supplied
+`review.Publisher`, and notify. Since v1.3.0 the kit ships
 **no AI adapter** — reviewer implementations (and the AI SDK choice) live in the consuming app.
 It is consumed by the downstream app `adk-review` (Web/Worker), which supplies the concrete
 adapters and owns the process entrypoint.
@@ -49,14 +49,14 @@ Hexagonal (ports and adapters), strictly layered:
 
 - **`review`** — the only package every other package may depend on, and it depends on nothing in
   this module. Holds the domain types (`Request`, `Report`/`Verdict`/`Finding`/`Severity`/`Decision`,
-  `Result`/`Status`), the sentinel errors (`ErrEmptyDiff`, `ErrRefNotFound`, `ErrInvalidReport`, …),
-  `StepError` (which carries the failing step name — there is no separate step field anywhere), and
-  every port. Ports are deliberately 1–2 methods each: `Reviewer`, `WorkspaceReviewer` (agent-style
-  reviewer that inspects the checked-out worktree; exactly one of the two goes into
-  `pipeline.Deps`), `DiffSource` (+ the optional `WorkspaceProvider` capability — `CheckoutHead` —
-  which the pipeline demands via type assertion only when `WorkspaceReviewer` is configured),
-  `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`. Changing a signature here ripples
-  into every adapter and into `adk-review` — check that repo before doing so.
+  `Result`/`Status`), the sentinel errors (`ErrEmptyDiff`, `ErrDiffTooLarge`, `ErrRefNotFound`,
+  `ErrInvalidReport`, …), `StepError` (which carries the failing step name — there is no separate
+  step field anywhere), and every port. Ports are deliberately 1–2 methods each:
+  `WorkspaceReviewer` (the only reviewer kind — it inspects the checked-out worktree),
+  `DiffSource` (+ the `WorkspaceProvider` capability — `CheckoutHead` — which the pipeline always
+  demands via type assertion), `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`.
+  Changing a signature here ripples into every adapter and into `adk-review` — check that repo
+  before doing so.
 - **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, *Report, error)` is the single
   orchestration entrypoint; there is no second layer under it. The `*Report` exists so callers
   that need the review's contents (recording job state, say) can read them from the return value

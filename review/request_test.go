@@ -91,33 +91,6 @@ func TestRequestValidate(t *testing.T) {
 	}
 }
 
-func TestNewRequest(t *testing.T) {
-	t.Run("検証を通ったリクエストをそのまま返す", func(t *testing.T) {
-		want := validRequest()
-
-		got, err := NewRequest(want)
-		if err != nil {
-			t.Fatalf("予期しないエラー: %v", err)
-		}
-		if got != want {
-			t.Fatalf("Request が変化しました: got %+v, want %+v", got, want)
-		}
-	})
-
-	t.Run("不正なリクエストはゼロ値とエラーを返す", func(t *testing.T) {
-		req := validRequest()
-		req.RepoURL = ""
-
-		got, err := NewRequest(req)
-		if !errors.Is(err, ErrInvalidRequest) {
-			t.Fatalf("ErrInvalidRequest を期待しましたが: %v", err)
-		}
-		if got != (Request{}) {
-			t.Fatalf("ゼロ値を期待しましたが: %+v", got)
-		}
-	})
-}
-
 // 旧実装のペイロード形式（base_branch / feature_branch / model_name）をそのまま
 // デコードできることを保証します。フィールド名を Base / Head へ改名したため、
 // タグが崩れると流通中のペイロードが静かに空で通ってしまいます。

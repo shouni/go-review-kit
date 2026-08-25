@@ -31,14 +31,6 @@ type PromptGenerator interface {
 	Generate(mode, diff string) (string, error)
 }
 
-// Reviewer は、プロンプトを AI に投げてレビュー結果を得ます。
-//
-// 戻り値が JSON 文字列ではなく Report なのは、デコードの責務を実装側に一度だけ持たせ、
-// 以降の層が生の文字列を再解釈しなくて済むようにするためです。
-type Reviewer interface {
-	Review(ctx context.Context, model, prompt string) (Report, error)
-}
-
 // Workspace は、Head をチェックアウト済みのローカル作業ディレクトリです。
 //
 // DiffSource.Diff は作業ツリーを使わずに差分を作るため、作業ツリーの内容が Head の状態で
@@ -53,21 +45,23 @@ type Workspace struct {
 	Head string
 }
 
-// WorkspaceReviewer は、プロンプトに加えて作業ディレクトリを参照できるレビュアーです。
+// WorkspaceReviewer は、プロンプトと作業ディレクトリからレビュー結果を返します。
 //
-// Reviewer が差分だけで完結する単発のレビューを表すのに対し、こちらは差分の外
-// （変更されなかったファイル、前後の章など）を実装が自分で調べるエージェント型を想定して
-// います。どちらで実行するかは、pipeline.Deps にどちらを設定するかで決まります。
+// 差分の外（変更されなかったファイル、前後の章など）を実装が自分で調べるエージェント型を
+// 想定しています。差分そのものはプロンプトに含まれて渡ります。
+//
+// 戻り値が JSON 文字列ではなく Report なのは、デコードの責務を実装側に一度だけ持たせ、
+// 以降の層が生の文字列を再解釈しなくて済むようにするためです。
 type WorkspaceReviewer interface {
-	ReviewWorkspace(ctx context.Context, model, prompt string, ws Workspace) (Report, error)
+	Review(ctx context.Context, model, prompt string, ws Workspace) (Report, error)
 }
 
 // WorkspaceProvider は、Head をチェックアウトした作業ディレクトリを用意できる DiffSource の
 // 追加能力です。
 //
-// DiffSource 本体に含めないのは、単発レビューだけの構成にはチェックアウトが不要なためです。
-// パイプラインは WorkspaceReviewer が設定されている場合にだけ、この能力を型アサーションで
-// 要求します。
+// **パイプラインはレビューの前に必ずこれを要求します。** DiffSource 本体に畳み込んでいないのは、
+// clone・fetch と作業ツリーの操作が別の関心だからです。満たさない実装を渡した場合は
+// StepCheckout の失敗になります（git パッケージの 2 実装はどちらも満たします）。
 type WorkspaceProvider interface {
 	// CheckoutHead は、head を作業ツリーへチェックアウトし、そのディレクトリを返します。
 	CheckoutHead(ctx context.Context, head string) (dir string, err error)

@@ -28,25 +28,10 @@ const DefaultPublishTimeout = 2 * time.Minute
 type Deps struct {
 	Sources review.DiffSourceFactory
 	// Prompts は、モードと差分から AI へ送るプロンプトを組み立てます。
-	//
-	// **Reviewer と WorkspaceReviewer で Pipeline を 2 つ組む場合、ここだけは
-	// 共有しないでください。** プロンプトは、実行するレビュアーに何ができるかを
-	// 説明するものです。差分しか読めない Reviewer に「ファイルを開いて確認しろ」
-	// 「確認した根拠を挙げろ」と書いたプロンプトを渡すと、確認する手段が無いまま
-	// 根拠を求めることになり、モデルはそれを捏造して埋めます。
-	//
-	// Generate はモードと差分しか受け取らないため、レビュアーの違いは
-	// **生成器そのものを分けて**表してください。
 	Prompts review.PromptGenerator
-	// Reviewer は、差分だけで完結する単発のレビュアーです。
-	// WorkspaceReviewer とはどちらか一方だけを設定します。
-	Reviewer review.Reviewer
-	// WorkspaceReviewer は、作業ディレクトリを参照するレビュアーです。
-	// 設定する場合、Sources が返す DiffSource は review.WorkspaceProvider を満たす
-	// 必要があります（git パッケージの 2 実装はどちらも満たします）。
-	// レビュアーの使い分けはリクエスト単位ではなくパイプライン単位です。モードごとに
-	// 使い分けたい呼び出し側は、Prompts 以外のアダプターを共有した Pipeline を 2 つ
-	// 組んでください（Prompts を共有してはいけない理由は同フィールドを参照）。
+	// WorkspaceReviewer は、作業ディレクトリを調べてレビューするレビュアーです。
+	// Sources が返す DiffSource は review.WorkspaceProvider を満たす必要があります
+	// （git パッケージの 2 実装はどちらも満たします）。
 	WorkspaceReviewer review.WorkspaceReviewer
 	Publisher         review.Publisher
 	Notifier          review.Notifier
@@ -60,21 +45,13 @@ func (d Deps) validate() error {
 	}{
 		{"Sources", d.Sources},
 		{"Prompts", d.Prompts},
+		{"WorkspaceReviewer", d.WorkspaceReviewer},
 		{"Publisher", d.Publisher},
 		{"Notifier", d.Notifier},
 	} {
 		if isNil(dep.value) {
 			missing = append(missing, dep.name)
 		}
-	}
-
-	// レビュアーは「どちらか一方だけ」です。両方設定されていると、どちらで実行される
-	// つもりだったのかが Deps から読み取れず、静かに片方を無視すると設定ミスに気付けません。
-	switch {
-	case isNil(d.Reviewer) && isNil(d.WorkspaceReviewer):
-		missing = append(missing, "Reviewer または WorkspaceReviewer")
-	case !isNil(d.Reviewer) && !isNil(d.WorkspaceReviewer):
-		return fmt.Errorf("pipeline: Reviewer と WorkspaceReviewer は同時に設定できません（どちらか一方にしてください）")
 	}
 
 	if len(missing) > 0 {
@@ -240,16 +217,8 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (review.Repo
 	return p.review(ctx, source, req, prompt)
 }
 
-// review は、Deps に設定されている方のレビュアーで AI レビューを実行します。
+// review は、Head をチェックアウトしたうえで AI レビューを実行します。
 func (p *Pipeline) review(ctx context.Context, source review.DiffSource, req review.Request, prompt string) (review.Report, error) {
-	if p.deps.WorkspaceReviewer == nil {
-		report, err := p.deps.Reviewer.Review(ctx, req.Model, prompt)
-		if err != nil {
-			return review.Report{}, review.WrapStep(review.StepReview, err)
-		}
-		return report, nil
-	}
-
 	// Head を明示的にチェックアウトします（理由は review.Workspace のドキュメントを参照）。
 	// これを省くと、レビュアーは前回の実行が残した別参照の内容を読んでしまいます。
 	provider, ok := source.(review.WorkspaceProvider)
@@ -263,7 +232,7 @@ func (p *Pipeline) review(ctx context.Context, source review.DiffSource, req rev
 		return review.Report{}, review.WrapStep(review.StepCheckout, err)
 	}
 
-	report, err := p.deps.WorkspaceReviewer.ReviewWorkspace(ctx, req.Model, prompt, review.Workspace{
+	report, err := p.deps.WorkspaceReviewer.Review(ctx, req.Model, prompt, review.Workspace{
 		Dir:  dir,
 		Base: req.Base,
 		Head: req.Head,
