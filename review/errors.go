@@ -83,8 +83,7 @@ func WrapStep(step string, err error) error {
 
 // StepOf は err に含まれる工程名を返します。工程名が付与されていない場合は空文字を返します。
 func StepOf(err error) string {
-	var se *StepError
-	if errors.As(err, &se) {
+	if se, ok := errors.AsType[*StepError](err); ok {
 		return se.Step
 	}
 	return ""
