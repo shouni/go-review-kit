@@ -115,3 +115,7 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only â
   Don't assume a local edit is visible to that repo until that whole sequence has happened.
   With adk-review as the sole consumer, pragmatic breaking changes within v1 are accepted
   (v1.3.0 removed the `gemini` package this way).
+
+## Conventions
+
+- **Error text**: sentinel errors are English with a package prefix (`review: diff is empty`) so a deeply wrapped error still names its origin; the context added by `fmt.Errorf` wrapping is Japanese. Existing English wrap text is not being retrofitted â€” apply the rule to code you touch.
