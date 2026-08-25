@@ -261,8 +261,7 @@ func (c *CLI) runIn(ctx context.Context, dir string, args ...string) (string, er
 		// そのままエラーとして呼び出し側のログや通知へ流れます。
 		message := redactURL(strings.TrimSpace(stderr.String()))
 
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
+		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
 			c.settings.logger.DebugContext(ctx, "gitコマンドが失敗しました",
 				"args", args, "exit", exitErr.ExitCode(), "stderr", message)
 			return "", fmt.Errorf("git %s が終了コード %d で失敗しました: %s: %w",

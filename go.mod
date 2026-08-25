@@ -1,6 +1,6 @@
 module github.com/shouni/go-review-kit
 
-go 1.26
+go 1.27
 
 require github.com/go-git/go-git/v5 v5.19.2
 
