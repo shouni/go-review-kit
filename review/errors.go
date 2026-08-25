@@ -12,10 +12,10 @@ import (
 // 種類は番兵エラーで表します。
 var (
 	// ErrInvalidRequest は、Request の必須項目が欠けていることを示します。
-	ErrInvalidRequest = errors.New("レビューリクエストが不正です")
+	ErrInvalidRequest = errors.New("review: request is invalid")
 	// ErrEmptyDiff は、base と head の間に差分が無くレビューをスキップしたことを示します。
 	// これは失敗ではないため、パイプラインは StatusSkipped の Result と共に nil を返します。
-	ErrEmptyDiff = errors.New("差分が存在しません")
+	ErrEmptyDiff = errors.New("review: diff is empty")
 	// ErrDiffTooLarge は、差分が上限（pipeline.WithMaxDiffBytes）を超えたため、
 	// AI へ送らずに中断したことを示します。
 	//
@@ -27,22 +27,22 @@ var (
 	// 途中切れ・締切超過・入力上限のいずれかで結局失敗しますが、**そのどれもが
 	// モデルを呼び終えたあとにしか分かりません。** いちばんコストを払ったあとで
 	// 落ちる順序になります。
-	ErrDiffTooLarge = errors.New("差分が大きすぎます")
+	ErrDiffTooLarge = errors.New("review: diff is too large")
 	// ErrRefNotFound は、指定された参照がリポジトリに存在しないことを示します。
 	//
 	// 「読もうとして失敗した」場合はこれではありません。リポジトリの破損やディスク障害まで
 	// 畳み込むと、利用者へ「そのブランチはありません」と伝えてしまうためです。
-	ErrRefNotFound = errors.New("参照が見つかりません")
+	ErrRefNotFound = errors.New("review: ref not found")
 	// ErrUnsupportedRepoURL は、リポジトリURLの形式を扱えないことを示します。
 	//
 	// 入力の誤りであって障害ではないので、再試行しても直りません。利用者へ形式を
 	// 直してもらう案内が要る一方、ネットワーク起因の失敗は再試行で直るため、
 	// 呼び出し側が両者を分けられるように番兵にしています。
-	ErrUnsupportedRepoURL = errors.New("リポジトリURLの形式を扱えません")
+	ErrUnsupportedRepoURL = errors.New("review: unsupported repository URL")
 	// ErrEmptyResponse は、AI がエラーを返さずに空の結果を返したことを示します。
-	ErrEmptyResponse = errors.New("AIが空の応答を返しました")
+	ErrEmptyResponse = errors.New("review: model returned an empty response")
 	// ErrInvalidReport は、AI の出力をレポートとして解釈できなかったことを示します。
-	ErrInvalidReport = errors.New("レビュー結果が不正です")
+	ErrInvalidReport = errors.New("review: report is not valid")
 )
 
 // パイプラインの工程名です。StepError.Step に入り、通知の文面などに利用できます。

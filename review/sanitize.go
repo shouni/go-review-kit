@@ -21,6 +21,13 @@ import (
 // 悪化させないことを優先します。
 //
 // 補修したかどうかを知りたい場合は、戻り値と入力を比べてください。
+//
+// **go-gemini-client の gemini.CleanJSONResponse が同じ問題を解いています。意図的に
+// 別実装のままです。** このモジュールは engine を差し替えられるよう go.mod を go-git
+// 1 本に絞っており、Gemini 専用のクライアントを require すると呼び出し側（adk-review）の
+// モジュールグラフに載ります。片方を直したらもう片方も見てください。
+// なお salvageJSON（切り詰められた応答からの救出）はこちらにしかありません。
+// データを落とす操作で、落ちたことを呼び出し側へ伝える口（ParseInfo.Truncated）が要るためです。
 func SanitizeJSON(data []byte) []byte {
 	if json.Valid(data) {
 		return data
