@@ -31,10 +31,7 @@ type GoGit struct {
 }
 
 // 実装がポートを満たすことをコンパイル時に確認します。
-var (
-	_ Source                   = (*GoGit)(nil)
-	_ review.WorkspaceProvider = (*GoGit)(nil)
-)
+var _ Source = (*GoGit)(nil)
 
 // NewGoGit は、localPath を作業ディレクトリとする GoGit を生成します。
 func NewGoGit(localPath string, opts ...Option) (*GoGit, error) {
@@ -160,7 +157,7 @@ func (g *GoGit) Diff(ctx context.Context, base, head string) (string, error) {
 }
 
 // CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
-// review.WorkspaceProvider の実装です。
+// review.DiffSource の実装です。
 //
 // go-git のチェックアウトは context を受け取れないため、ctx は取り消しには効かず
 // ログにだけ使います（シグネチャはポート側の統一です）。

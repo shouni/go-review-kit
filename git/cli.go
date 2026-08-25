@@ -38,10 +38,7 @@ type CLI struct {
 }
 
 // 実装がポートを満たすことをコンパイル時に確認します。
-var (
-	_ Source                   = (*CLI)(nil)
-	_ review.WorkspaceProvider = (*CLI)(nil)
-)
+var _ Source = (*CLI)(nil)
 
 // NewCLI は、localPath を作業ディレクトリとする CLI を生成します。
 func NewCLI(localPath string, opts ...Option) (*CLI, error) {
@@ -141,7 +138,7 @@ func (c *CLI) Diff(ctx context.Context, base, head string) (string, error) {
 }
 
 // CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
-// review.WorkspaceProvider の実装です。
+// review.DiffSource の実装です。
 //
 // チェックアウト後に未追跡ファイルも削除します。作業ディレクトリは実行をまたいで
 // 再利用されるため、前回の実行が Close まで到達せず落ちていた場合の残骸が、head の

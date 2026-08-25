@@ -12,11 +12,11 @@ import (
 
 func TestNewRejectsMissingDeps(t *testing.T) {
 	full := Deps{
-		Sources:   &fakeFactory{},
-		Prompts:   &fakePrompts{},
-		Reviewer:  &fakeReviewer{},
-		Publisher: &fakePublisher{},
-		Notifier:  &fakeNotifier{},
+		Sources:           &fakeFactory{},
+		Prompts:           &fakePrompts{},
+		WorkspaceReviewer: &fakeReviewer{},
+		Publisher:         &fakePublisher{},
+		Notifier:          &fakeNotifier{},
 	}
 
 	tests := []struct {
@@ -25,7 +25,7 @@ func TestNewRejectsMissingDeps(t *testing.T) {
 	}{
 		{"Sources が nil", func(d *Deps) { d.Sources = nil }},
 		{"Prompts が nil", func(d *Deps) { d.Prompts = nil }},
-		{"Reviewer が nil", func(d *Deps) { d.Reviewer = nil }},
+		{"WorkspaceReviewer が nil", func(d *Deps) { d.WorkspaceReviewer = nil }},
 		{"Publisher が nil", func(d *Deps) { d.Publisher = nil }},
 		{"Notifier が nil", func(d *Deps) { d.Notifier = nil }},
 	}
@@ -248,6 +248,11 @@ func TestRunFailures(t *testing.T) {
 			name:     "プロンプト生成に失敗",
 			arrange:  func(h *harness) { h.prompts.err = errBoom },
 			wantStep: review.StepPrompt,
+		},
+		{
+			name:     "Headチェックアウトに失敗",
+			arrange:  func(h *harness) { h.source.checkoutErr = errBoom },
+			wantStep: review.StepCheckout,
 		},
 		{
 			name:     "AIレビューに失敗",
@@ -492,17 +497,19 @@ func TestRunReturnsNilReportForInvalidRequest(t *testing.T) {
 	}
 }
 
-// slowReviewer は、context がキャンセルされるまで待つ review.Reviewer です。
+// slowReviewer は、context がキャンセルされるまで待つ review.WorkspaceReviewer です。
 type slowReviewer struct {
 	sawDeadline bool
 	hadDeadline bool
 }
 
-func (s *slowReviewer) Review(ctx context.Context, _, _ string) (review.Report, error) {
+func (s *slowReviewer) Review(
+	ctx context.Context, _, _ string, _ review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	_, s.hadDeadline = ctx.Deadline()
 	<-ctx.Done()
 	s.sawDeadline = true
-	return review.Report{}, ctx.Err()
+	return review.Report{}, review.RunInfo{}, ctx.Err()
 }
 
 // WithRunTimeout がレビュー本体にだけ締切を掛けること。
@@ -515,7 +522,7 @@ func TestRunTimeoutBoundsReviewButNotNotify(t *testing.T) {
 
 	h := newHarness(t, WithRunTimeout(20*time.Millisecond))
 	slow := &slowReviewer{}
-	h.pipeline.deps.Reviewer = slow
+	h.pipeline.deps.WorkspaceReviewer = slow
 
 	result, report, err := h.pipeline.Run(context.Background(), testRequest())
 
@@ -547,7 +554,7 @@ func TestRunTimeoutDefaultsToUnlimited(t *testing.T) {
 	}
 
 	probe := &deadlineProbe{report: testReport()}
-	h.pipeline.deps.Reviewer = probe
+	h.pipeline.deps.WorkspaceReviewer = probe
 	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
 		t.Fatalf("Run が失敗しました: %v", err)
 	}
@@ -568,15 +575,17 @@ func TestRunTimeoutIgnoresNonPositive(t *testing.T) {
 	}
 }
 
-// deadlineProbe は、渡された context に締切があるかだけを見る review.Reviewer です。
+// deadlineProbe は、渡された context に締切があるかだけを見る review.WorkspaceReviewer です。
 type deadlineProbe struct {
 	report      review.Report
 	hadDeadline bool
 }
 
-func (d *deadlineProbe) Review(ctx context.Context, _, _ string) (review.Report, error) {
+func (d *deadlineProbe) Review(
+	ctx context.Context, _, _ string, _ review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	_, d.hadDeadline = ctx.Deadline()
-	return d.report, nil
+	return d.report, review.RunInfo{}, nil
 }
 
 // slowPublisher は、context が切れるまで粘って失敗する review.Publisher です。
@@ -674,17 +683,22 @@ func TestValidateRejectsTypedNilDependency(t *testing.T) {
 	}
 }
 
-// typed-nil の Reviewer は「両方設定」と誤判定しないこと。
+// typed-nil のレビュアーは未設定として弾くこと。
+//
+// 素の == nil では見逃すため、通すと**最初に呼んだ時点で nil ポインタ参照**になります。
 func TestValidateTreatsTypedNilReviewerAsUnset(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	deps := h.pipeline.deps
-	deps.Reviewer = (*deadlineProbe)(nil)
-	deps.WorkspaceReviewer = &fakeWorkspaceReviewer{report: testReport()}
+	deps.WorkspaceReviewer = (*deadlineProbe)(nil)
 
-	if _, err := New(deps); err != nil {
-		t.Fatalf("typed-nil の Reviewer が「同時に設定」と誤判定されました: %v", err)
+	_, err := New(deps)
+	if err == nil {
+		t.Fatal("typed-nil のレビュアーが素通りしました")
+	}
+	if !strings.Contains(err.Error(), "WorkspaceReviewer") {
+		t.Errorf("エラーに項目名がありません: %v", err)
 	}
 }
 
@@ -695,5 +709,87 @@ func TestNewIgnoresNilOption(t *testing.T) {
 	h := newHarness(t)
 	if _, err := New(h.pipeline.deps, nil, WithPublishTimeout(time.Second), nil); err != nil {
 		t.Fatalf("nil Option でエラーになりました: %v", err)
+	}
+}
+
+// ★ 計測値は失敗した実行でも残ること。
+//
+// **上限が厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。**
+// 成功したときだけ数字が残る作りだと、分布の裾がいちばん見たいときに欠けます。
+func TestRunCarriesStatsIntoResult(t *testing.T) {
+	t.Parallel()
+
+	info := review.RunInfo{
+		Truncated:     true,
+		PromptTokens:  219062,
+		OutputTokens:  63950,
+		ThoughtTokens: 1579,
+		ToolCalls:     5,
+	}
+
+	tests := []struct {
+		name    string
+		arrange func(*harness)
+		want    review.Status
+	}{
+		{"成功", func(*harness) {}, review.StatusSucceeded},
+		{"AIレビューに失敗", func(h *harness) { h.reviewer.err = errBoom }, review.StatusFailed},
+		{"公開に失敗", func(h *harness) { h.publisher.err = errBoom }, review.StatusFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.reviewer.info = info
+			tt.arrange(h)
+
+			result, _, _ := h.pipeline.Run(context.Background(), testRequest())
+
+			if result.Status != tt.want {
+				t.Fatalf("Status = %q, want %q", result.Status, tt.want)
+			}
+			if result.DiffBytes != len(h.source.diff) {
+				t.Errorf("DiffBytes = %d, want %d", result.DiffBytes, len(h.source.diff))
+			}
+			if result.Run != info {
+				t.Errorf("Run = %+v, want %+v", result.Run, info)
+			}
+		})
+	}
+}
+
+// レビューへ到達しなかった実行でも、差分の大きさまでは残ること。
+// 上限に弾かれた実行こそ、どのくらい超えていたのかを後から見たい対象です。
+func TestRunRecordsDiffBytesWhenRejected(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, WithMaxDiffBytes(16))
+	h.source.diff = strings.Repeat("a", 17)
+
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
+	if !errors.Is(err, review.ErrDiffTooLarge) {
+		t.Fatalf("err = %v, want ErrDiffTooLarge", err)
+	}
+	if result.DiffBytes != 17 {
+		t.Errorf("DiffBytes = %d, want 17", result.DiffBytes)
+	}
+	if result.Run != (review.RunInfo{}) {
+		t.Errorf("レビューしていないのに Run = %+v", result.Run)
+	}
+}
+
+// 差分が無い実行では、どちらもゼロ値であること。
+func TestRunLeavesStatsEmptyWhenSkipped(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.source.diff = ""
+
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("Run が失敗しました: %v", err)
+	}
+	if result.DiffBytes != 0 || result.Run != (review.RunInfo{}) {
+		t.Errorf("スキップなのに DiffBytes = %d, Run = %+v", result.DiffBytes, result.Run)
 	}
 }

@@ -1,7 +1,6 @@
 package review
 
 import (
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -9,10 +8,8 @@ import (
 // Status は、レビューパイプラインの最終状態です。
 type Status string
 
-// パイプラインの最終状態です。
-//
-// **値は受け取り側の表示分岐や保存済みの記録に現れるため、変更できません。**
-// SKIPPED を SUCCESS へ畳まないのは、「差分が無くて何も公開していない」場合と
+// 値は受け取り側の表示分岐と、そこから保存される記録に現れます。変えるなら記録の方も
+// 一緒に始末してください。SKIPPED を SUCCESS へ畳まないのは、「差分が無くて何も公開していない」場合と
 // 成果物がある場合を呼び出し側が判別できなくなるためです（Result.Published も参照）。
 const (
 	StatusSucceeded Status = "SUCCESS"
@@ -27,47 +24,20 @@ type Result struct {
 	PublicURL  string
 	Duration   time.Duration
 	Message    string
+
+	// DiffBytes は、AI へ送った差分の大きさです。差分を取れなかった場合は 0 です。
+	//
+	// 所要時間と併せて、上限（差分の大きさ・実行時間）を実測から調整するための材料に
+	// なります。**失敗した実行でも埋まります。** 上限が厳しすぎるかどうかを判断する材料は、
+	// 通った実行より弾かれた実行の側にあるためです。
+	DiffBytes int
+	// Run は、レビュアーが報告した実行の情報です。レビューまで到達しなかった場合は
+	// ゼロ値です。
+	Run RunInfo
 }
 
 // Published は、成果物がストレージへ公開されたかどうかを返します。
 func (r Result) Published() bool { return r.Status == StatusSucceeded }
-
-// resultJSON は Result のワイヤ表現です。所要時間を秒（float64）で出す旧来の形式を保ちつつ、
-// Go 側では time.Duration として扱うために変換をここへ閉じ込めます。
-type resultJSON struct {
-	Status          Status  `json:"status"`
-	StorageURI      string  `json:"storage_uri"`
-	PublicURL       string  `json:"public_url"`
-	DurationSeconds float64 `json:"duration_seconds"`
-	Message         string  `json:"message"`
-}
-
-// MarshalJSON は Result を JSON へ変換します。
-func (r Result) MarshalJSON() ([]byte, error) {
-	return json.Marshal(resultJSON{
-		Status:          r.Status,
-		StorageURI:      r.StorageURI,
-		PublicURL:       r.PublicURL,
-		DurationSeconds: r.Duration.Seconds(),
-		Message:         r.Message,
-	})
-}
-
-// UnmarshalJSON は JSON から Result を復元します。
-func (r *Result) UnmarshalJSON(data []byte) error {
-	var raw resultJSON
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	*r = Result{
-		Status:     raw.Status,
-		StorageURI: raw.StorageURI,
-		PublicURL:  raw.PublicURL,
-		Duration:   time.Duration(raw.DurationSeconds * float64(time.Second)),
-		Message:    raw.Message,
-	}
-	return nil
-}
 
 // Succeeded は、レビュー結果を公開できたときの Result を生成します。
 func Succeeded(req Request, duration time.Duration) Result {

@@ -58,7 +58,7 @@ func TestParseReport(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := ParseReport([]byte(tt.input))
+			got, _, err := ParseReport([]byte(tt.input))
 
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
@@ -77,7 +77,7 @@ func TestParseReport(t *testing.T) {
 }
 
 func TestParseReportDecodesFields(t *testing.T) {
-	got, err := ParseReport([]byte(validReportJSON))
+	got, _, err := ParseReport([]byte(validReportJSON))
 	if err != nil {
 		t.Fatalf("予期しないエラー: %v", err)
 	}

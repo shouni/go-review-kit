@@ -1,7 +1,6 @@
 package review
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -53,34 +52,5 @@ func TestFailedResultIncludesCause(t *testing.T) {
 	}
 	if !strings.Contains(result.Message, StepReview) {
 		t.Fatalf("Message に工程名が含まれていません: %q", result.Message)
-	}
-}
-
-// 所要時間は Go 側では time.Duration、JSON では秒（duration_seconds）で扱います。
-func TestResultJSONRoundTrip(t *testing.T) {
-	original := Succeeded(validRequest(), 1500*time.Millisecond)
-
-	data, err := json.Marshal(original)
-	if err != nil {
-		t.Fatalf("エンコードに失敗: %v", err)
-	}
-
-	var raw map[string]any
-	if err := json.Unmarshal(data, &raw); err != nil {
-		t.Fatalf("デコードに失敗: %v", err)
-	}
-	if got, ok := raw["duration_seconds"].(float64); !ok || got != 1.5 {
-		t.Fatalf("duration_seconds = %v, want 1.5", raw["duration_seconds"])
-	}
-	if raw["status"] != string(StatusSucceeded) {
-		t.Fatalf("status = %v, want %v", raw["status"], StatusSucceeded)
-	}
-
-	var restored Result
-	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("復元に失敗: %v", err)
-	}
-	if restored != original {
-		t.Fatalf("往復で一致しません:\n got %+v\nwant %+v", restored, original)
 	}
 }

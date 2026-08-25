@@ -43,13 +43,25 @@ func discardLogger() *slog.Logger {
 
 // fakeSource は review.DiffSource のテスト実装です。
 type fakeSource struct {
-	diff     string
-	diffErr  error
-	closeErr error
+	diff        string
+	diffErr     error
+	closeErr    error
+	dir         string
+	checkoutErr error
+
+	gotHead string
 
 	mu        sync.Mutex
 	closed    bool
 	closedCtx context.Context
+}
+
+func (f *fakeSource) CheckoutHead(_ context.Context, head string) (string, error) {
+	f.gotHead = head
+	if f.checkoutErr != nil {
+		return "", f.checkoutErr
+	}
+	return f.dir, nil
 }
 
 func (f *fakeSource) Diff(_ context.Context, _, _ string) (string, error) {
@@ -101,23 +113,28 @@ func (f *fakePrompts) Generate(mode, diff string) (string, error) {
 	return f.prompt, nil
 }
 
-// fakeReviewer は review.Reviewer のテスト実装です。
+// fakeReviewer は review.WorkspaceReviewer のテスト実装です。
 type fakeReviewer struct {
 	report review.Report
+	info   review.RunInfo
 	err    error
 
 	called    bool
 	gotModel  string
 	gotPrompt string
+	gotWS     review.Workspace
 }
 
-func (f *fakeReviewer) Review(_ context.Context, model, prompt string) (review.Report, error) {
+func (f *fakeReviewer) Review(
+	_ context.Context, model, prompt string, ws review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	f.called = true
-	f.gotModel, f.gotPrompt = model, prompt
+	f.gotModel, f.gotPrompt, f.gotWS = model, prompt, ws
 	if f.err != nil {
-		return review.Report{}, f.err
+		// 失敗してもトークンは消費済みなので、計測値は返します。
+		return review.Report{}, f.info, f.err
 	}
-	return f.report, nil
+	return f.report, f.info, nil
 }
 
 // fakePublisher は review.Publisher のテスト実装です。
@@ -192,7 +209,7 @@ type harness struct {
 func newHarness(t *testing.T, opts ...Option) *harness {
 	t.Helper()
 
-	source := &fakeSource{diff: "diff --git a/main.go b/main.go"}
+	source := &fakeSource{diff: "diff --git a/main.go b/main.go", dir: "/tmp/workdir"}
 	h := &harness{
 		source:    source,
 		factory:   &fakeFactory{source: source},
@@ -203,11 +220,11 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 	}
 
 	p, err := New(Deps{
-		Sources:   h.factory,
-		Prompts:   h.prompts,
-		Reviewer:  h.reviewer,
-		Publisher: h.publisher,
-		Notifier:  h.notifier,
+		Sources:           h.factory,
+		Prompts:           h.prompts,
+		WorkspaceReviewer: h.reviewer,
+		Publisher:         h.publisher,
+		Notifier:          h.notifier,
 	}, append([]Option{WithLogger(discardLogger())}, opts...)...)
 	if err != nil {
 		t.Fatalf("パイプラインの生成に失敗: %v", err)

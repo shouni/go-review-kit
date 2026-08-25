@@ -14,9 +14,9 @@
 1 本のパイプラインとして提供するライブラリです。`main` パッケージは持ちません。
 
 レビュー結果は型付きの `review.Report`（判定・重大度付きの指摘）として受け渡し、
-`ParseReport` / `Validate` で検証します。レビュアーの実体（単発の `review.Reviewer` /
-エージェント型の `review.WorkspaceReviewer`）は呼び出し側が差し込みます。AI SDK には
-依存しないため、コードに限らず Markdown 原稿のレビューなど、実装次第で用途を変えられます。
+`ParseReport` が解釈と検証を引き受けます（補修や切り出しが要ったかは `ParseInfo` で分かります）。レビュアーの実体（`review.WorkspaceReviewer`）は
+呼び出し側が差し込みます。AI SDK には依存しないため、コードに限らず Markdown 原稿の
+レビューなど、実装次第で用途を変えられます。
 
 ### 扱わないこと
 
@@ -24,7 +24,7 @@
 GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決めます。表示の作りに従属する
 決定なので、ライブラリ側に既定を持たせると利用側が要らないレンダリングと依存を抱えます。
 
-同じ理由で、レビュアー（`review.Reviewer` / `review.WorkspaceReviewer`）・プロンプトの文面
+同じ理由で、レビュアー（`review.WorkspaceReviewer`）・プロンプトの文面
 （`review.PromptGenerator`）・通知先（`review.Notifier`）も呼び出し側が実装します。
 どの AI SDK でレビューするかはアプリの選択であり、ライブラリが同梱すると全利用者が
 その SDK を抱えるためです。直接依存は `go-git` だけです。
@@ -46,13 +46,12 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
   1〜2 メソッドに絞ってあるため、テストのモックは数行で書けます。
 * **工程が 1 階層:** `pipeline.Run` が唯一の入口で、その下に中間層はありません。
 * **エラーは戻り値:** 失敗は通常の `error` として返り、種類は番兵エラーで判別できます。
-* **レビュアーは 2 系統:** 差分だけで完結する `Reviewer` と、Head をチェックアウトした
-  作業ディレクトリを自分で調べられる `WorkspaceReviewer`（エージェント型）です。
-  `pipeline.Deps` にはどちらか一方だけを設定します。
-  モードごとに使い分けたい場合は、`Prompts` 以外のアダプターを共有した Pipeline を 2 つ
-  組みます。**`Prompts` を共有してはいけません。** プロンプトは実行するレビュアーに何が
-  できるかを説明するものなので、差分しか読めない `Reviewer` にエージェント向けの
-  プロンプトを渡すと、確認する手段が無いまま根拠を求めることになります。
+* **上限を実測から決められます:** `Result` に差分の大きさ・所要時間・モデルの使用量・
+  ツール呼び出し回数が載ります。**失敗した実行でも埋まります。** 上限が厳しすぎるかどうかを
+  判断する材料は、通った実行より弾かれた実行の側にあるためです。
+* **レビュアーはエージェント型 1 系統:** `WorkspaceReviewer` は Head をチェックアウトした
+  作業ディレクトリを自分で調べられます。差分の外を確認できることが前提なので、
+  「ファイルを開いて確かめろ」「確認した根拠を挙げろ」と書いたプロンプトが常に成立します。
 
 ---
 
@@ -62,7 +61,7 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | :--- | :--- | :--- |
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
 | **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → (Head チェックアウト) → AI → 保存 → 通知 を制御し、結果を返します。 |
-| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします。 |
+| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。 |
 
 ```text
 go-review-kit
@@ -71,7 +70,7 @@ go-review-kit
 │   ├── report.go    #   Report / Verdict / Finding / Severity / Decision
 │   ├── result.go    #   Result / Status（SUCCESS / SKIPPED / FAILURE）
 │   ├── errors.go    #   番兵エラーと StepError（工程名付きエラー）
-│   └── ports.go     #   Reviewer / WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
+│   └── ports.go     #   WorkspaceReviewer / DiffSource / Publisher / Notifier ほか
 ├── pipeline/        # 実行：Run(ctx, Request) (Result, *Report, error)
 └── git/             # 実装：gogit.go / cli.go / factory.go / options.go / auth.go / refs.go
 ```
@@ -134,7 +133,7 @@ import (
 // 保存・通知・プロンプトは internal/adapters）。
 func run(
 	ctx context.Context,
-	reviewer review.Reviewer,
+	reviewer review.WorkspaceReviewer,
 	publisher review.Publisher,
 	notifier review.Notifier,
 	prompts review.PromptGenerator,
@@ -145,11 +144,11 @@ func run(
 	}
 
 	p, err := pipeline.New(pipeline.Deps{
-		Sources:   sources,
-		Prompts:   prompts,
-		Reviewer:  reviewer,
-		Publisher: publisher,
-		Notifier:  notifier,
+		Sources:           sources,
+		Prompts:           prompts,
+		WorkspaceReviewer: reviewer,
+		Publisher:         publisher,
+		Notifier:          notifier,
 	})
 	if err != nil {
 		return err
@@ -218,9 +217,12 @@ case err != nil:
   Markdown のフェンス、末尾の説明文、エスケープし忘れたバックスラッシュ（ソースの正規表現を
   引用したときに出ます）、生の改行やタブ（複数行を引用したときに出ます）を混ぜることが
   あります。**応答を返しきったあとの崩れなので API の再試行では直りません。**
-  そのまま解釈できたときは何もせず、失敗したときだけ補修を試し、補修しても駄目なら
-  元の壊れ方を指すエラーを返します。補修だけを使いたい場合は `review.SanitizeJSON` を
-  直接呼べます。
+  そのまま解釈できたときは何もせず、失敗したときだけ補修を試します。補修だけを使いたい場合は
+  `review.SanitizeJSON` を直接呼べます。
+* **出力が途中で切れた場合は、完結していた範囲だけを拾います。** 出力の上限に当たったモデルは
+  文の途中で止まりますが、そこまでの指摘は正しい JSON として並んでいます。全損にする代わりに、
+  最後に閉じ終えた要素まで戻して返します。**このとき `ParseInfo.Truncated` が真になります。
+  見ずに使うと、切り詰めたレビューを完全なものとして公開することになります。**
 * **指摘の並びは呼び出し側が確定させます。** モデルへ「重い順に」と指示しても守られる保証は
   ないため、`Report.SortFindings()` で重大度の重い順（同じ重大度の中は元の順序のまま）に
   並べ替えられます。重さの定義は `Severities()` の並びで、順位表を呼び出し側に持たせません。
@@ -262,8 +264,7 @@ case err != nil:
   載せてください。
 * **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
   触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
-  `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。この構成では
-  `DiffSourceFactory` が返す `DiffSource` は `review.WorkspaceProvider` を満たす必要があります。
+  `DiffSource.CheckoutHead` で明示的にチェックアウトします。
 
 ---
 
@@ -276,7 +277,7 @@ sequenceDiagram
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
     participant PG as PromptGenerator (呼び出し側)
-    participant AI as Reviewer or WorkspaceReviewer (呼び出し側)
+    participant AI as WorkspaceReviewer (呼び出し側)
     participant PB as Publisher (呼び出し側)
     participant NT as Notifier (呼び出し側)
 
@@ -300,13 +301,9 @@ sequenceDiagram
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt
 
-        alt Reviewer 構成（単発）
-            PL->>AI: Review(ctx, model, prompt)
-        else WorkspaceReviewer 構成（エージェント型）
-            PL->>DS: CheckoutHead(ctx, head)
-            DS-->>PL: 作業ディレクトリ（Head の状態）
-            PL->>AI: ReviewWorkspace(ctx, model, prompt, ws)
-        end
+        PL->>DS: CheckoutHead(ctx, head)
+        DS-->>PL: 作業ディレクトリ（Head の状態）
+        PL->>AI: Review(ctx, model, prompt, ws)
         AI-->>PL: review.Report
         PL->>DS: Close(ctx)
 
