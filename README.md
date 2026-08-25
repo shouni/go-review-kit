@@ -193,6 +193,8 @@ case errors.Is(err, review.ErrRefNotFound):
 	// ブランチ・コミットが見つからない（再試行しても直らない）
 case errors.Is(err, review.ErrUnsupportedRepoURL):
 	// URL の形式が扱えない（同上。SSH 形式かローカルパスにしてもらう）
+case errors.Is(err, review.ErrDiffTooLarge):
+	// 差分が WithMaxDiffBytes の上限を超えた（同上。範囲を狭めてもらう）
 case err != nil:
 	log.Printf("%s で失敗しました: %v", review.StepOf(err), err)
 }
@@ -224,6 +226,13 @@ case err != nil:
   並べ替えられます。重さの定義は `Severities()` の並びで、順位表を呼び出し側に持たせません。
 * **差分が無いのは失敗ではありません。** `Run` は `StatusSkipped` と `nil` を返します。成果物の
   有無は `Result.Published()` で判別できます。
+* **大きすぎる差分は AI へ送る前に落とせます（`pipeline.WithMaxDiffBytes`、既定は無制限）。**
+  上限を超えると、レビューを実行せず `review.ErrDiffTooLarge` を包んだエラーで失敗します
+  （工程は `review.StepDiff`）。**差分なしと違いスキップではなく失敗です。** 範囲を絞れば
+  通る入力なので、利用者に手を打ってもらう必要があり、スキップにすると「レビューはしたが
+  指摘が無かった」と見分けが付きません。上限まで切り詰めて送る作りにはしていません。
+  モデルは差分の一部だけを見たまま **成功として** レポートを返すため、質の落ちたレビューが
+  成果物として残り、落ちるより気付きにくくなります。
 * **`Run` はレビュー結果（`*Report`）も返します。** レビューが成立した場合のみ非 nil です。
   保存に失敗した場合は `Report` が非 nil のままエラーも返るため、「レビューはできたが残せ
   なかった」を区別できます。レビューの中身を使う処理（ジョブ状態の記録など）は、`Notifier`
@@ -283,6 +292,10 @@ sequenceDiagram
         PL->>DS: Close(ctx)
         PL->>NT: Notify(StatusSkipped)
         PL-->>App: Result{SKIPPED}, nil, nil
+    else 上限超過（WithMaxDiffBytes 設定時）
+        PL->>DS: Close(ctx)
+        PL->>NT: Notify(StatusFailed, ErrDiffTooLarge)
+        PL-->>App: Result{FAILURE}, nil, err
     else 差分あり
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt

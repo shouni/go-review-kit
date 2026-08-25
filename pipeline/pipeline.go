@@ -108,6 +108,8 @@ type Pipeline struct {
 	publishTimeout time.Duration
 	// runTimeout は差分取得〜AI レビューの上限です。0 は無制限。
 	runTimeout time.Duration
+	// maxDiffBytes は AI へ送る差分の上限（バイト）です。0 は無制限。
+	maxDiffBytes int
 }
 
 // New は Pipeline を生成します。依存に nil が含まれる場合はエラーを返します。
@@ -217,6 +219,15 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (review.Repo
 	}
 	if strings.TrimSpace(diff) == "" {
 		return review.Report{}, review.ErrEmptyDiff
+	}
+
+	// ★ 大きすぎる差分は、送っても出力の途中切れか締切超過で失敗します。**どちらも
+	// モデルを呼び終えたあとにしか分かりません。** 送る前に落として、利用者が手を
+	// 打てる形で返します（切り詰めない理由は WithMaxDiffBytes）。
+	if p.maxDiffBytes > 0 && len(diff) > p.maxDiffBytes {
+		return review.Report{}, review.WrapStep(review.StepDiff, fmt.Errorf(
+			"%w: %d バイト（上限 %d バイト）: base と head の範囲を狭めて再実行してください",
+			review.ErrDiffTooLarge, len(diff), p.maxDiffBytes))
 	}
 
 	prompt, err := p.deps.Prompts.Generate(req.Mode, diff)
