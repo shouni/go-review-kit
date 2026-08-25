@@ -53,8 +53,8 @@ Hexagonal (ports and adapters), strictly layered:
   `ErrInvalidReport`, …), `StepError` (which carries the failing step name — there is no separate
   step field anywhere), and every port. Ports are deliberately 1–2 methods each:
   `WorkspaceReviewer` (the only reviewer kind — it inspects the checked-out worktree),
-  `DiffSource` (+ the `WorkspaceProvider` capability — `CheckoutHead` — which the pipeline always
-  demands via type assertion), `DiffSourceFactory`, `PromptGenerator`, `Publisher`, `Notifier`.
+  `DiffSource` (`Diff` + `CheckoutHead` + `Close`), `DiffSourceFactory`, `PromptGenerator`,
+  `Publisher`, `Notifier`.
   Changing a signature here ripples into every adapter and into `adk-review` — check that repo
   before doing so.
 - **`pipeline`** — `Pipeline.Run(ctx, Request) (Result, *Report, error)` is the single

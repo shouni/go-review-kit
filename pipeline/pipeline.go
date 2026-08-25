@@ -30,8 +30,6 @@ type Deps struct {
 	// Prompts は、モードと差分から AI へ送るプロンプトを組み立てます。
 	Prompts review.PromptGenerator
 	// WorkspaceReviewer は、作業ディレクトリを調べてレビューするレビュアーです。
-	// Sources が返す DiffSource は review.WorkspaceProvider を満たす必要があります
-	// （git パッケージの 2 実装はどちらも満たします）。
 	WorkspaceReviewer review.WorkspaceReviewer
 	Publisher         review.Publisher
 	Notifier          review.Notifier
@@ -221,13 +219,7 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (review.Repo
 func (p *Pipeline) review(ctx context.Context, source review.DiffSource, req review.Request, prompt string) (review.Report, error) {
 	// Head を明示的にチェックアウトします（理由は review.Workspace のドキュメントを参照）。
 	// これを省くと、レビュアーは前回の実行が残した別参照の内容を読んでしまいます。
-	provider, ok := source.(review.WorkspaceProvider)
-	if !ok {
-		return review.Report{}, review.WrapStep(review.StepCheckout,
-			fmt.Errorf("差分取得元 (%T) が作業ディレクトリを提供できません: review.WorkspaceProvider を満たす実装が必要です", source))
-	}
-
-	dir, err := provider.CheckoutHead(ctx, req.Head)
+	dir, err := source.CheckoutHead(ctx, req.Head)
 	if err != nil {
 		return review.Report{}, review.WrapStep(review.StepCheckout, err)
 	}

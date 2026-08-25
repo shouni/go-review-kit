@@ -58,7 +58,7 @@ GCS / S3 / DB のどこへ置くのかは `review.Publisher` の実装が決め�
 | :--- | :--- | :--- |
 | **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません。 |
 | **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → (Head チェックアウト) → AI → 保存 → 通知 を制御し、結果を返します。 |
-| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。どちらも `WorkspaceProvider` を満たします（パイプラインが必ず要求します）。 |
+| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit` と `CLI` の 2 種類。 |
 
 ```text
 go-review-kit
@@ -258,9 +258,7 @@ case err != nil:
   載せてください。
 * **`WorkspaceReviewer` が呼ばれる時点で、作業ツリーは Head の状態です。** `Diff` は作業ツリーに
   触れずオブジェクト比較だけで差分を作るため、パイプラインがレビュー直前に
-  `WorkspaceProvider.CheckoutHead` で明示的にチェックアウトします。**`DiffSourceFactory` が返す
-  `DiffSource` は必ず `review.WorkspaceProvider` を満たす必要があり**、満たさない場合は
-  `StepCheckout` の失敗になります。
+  `DiffSource.CheckoutHead` で明示的にチェックアウトします。
 
 ---
 

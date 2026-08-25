@@ -20,7 +20,7 @@ const (
 // Decision は、レビュー全体の判定です。Severity に「問題なし」を表す DecisionNone を加えたものです。
 type Decision string
 
-// **値は受け取り側の表示分岐や保存済みの記録に現れるため、変更できません。**
+// 値は受け取り側の表示分岐と、そこから保存される記録に現れます。
 const (
 	DecisionBlocker Decision = Decision(SeverityBlocker)
 	DecisionMajor   Decision = Decision(SeverityMajor)

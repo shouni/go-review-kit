@@ -41,8 +41,7 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeSource は、review.DiffSource と review.WorkspaceProvider のテスト実装です。
-// git パッケージの 2 実装と同じく、両方を満たします。
+// fakeSource は review.DiffSource のテスト実装です。
 type fakeSource struct {
 	diff        string
 	diffErr     error
@@ -132,22 +131,6 @@ func (f *fakeReviewer) Review(_ context.Context, model, prompt string, ws review
 		return review.Report{}, f.err
 	}
 	return f.report, nil
-}
-
-// bareSource は、review.WorkspaceProvider を満たさない DiffSource です。
-// 能力の欠けた実装を渡された場合の振る舞いを確かめるためだけに使います。
-type bareSource struct {
-	diff string
-}
-
-func (b *bareSource) Diff(context.Context, string, string) (string, error) { return b.diff, nil }
-func (b *bareSource) Close(context.Context) error                          { return nil }
-
-// bareFactory は bareSource を返す review.DiffSourceFactory です。
-type bareFactory struct{ source *bareSource }
-
-func (f *bareFactory) Open(context.Context, review.Request) (review.DiffSource, error) {
-	return f.source, nil
 }
 
 // fakePublisher は review.Publisher のテスト実装です。
