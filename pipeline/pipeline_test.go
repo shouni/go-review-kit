@@ -503,11 +503,13 @@ type slowReviewer struct {
 	hadDeadline bool
 }
 
-func (s *slowReviewer) Review(ctx context.Context, _, _ string, _ review.Workspace) (review.Report, error) {
+func (s *slowReviewer) Review(
+	ctx context.Context, _, _ string, _ review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	_, s.hadDeadline = ctx.Deadline()
 	<-ctx.Done()
 	s.sawDeadline = true
-	return review.Report{}, ctx.Err()
+	return review.Report{}, review.RunInfo{}, ctx.Err()
 }
 
 // WithRunTimeout がレビュー本体にだけ締切を掛けること。
@@ -579,9 +581,11 @@ type deadlineProbe struct {
 	hadDeadline bool
 }
 
-func (d *deadlineProbe) Review(ctx context.Context, _, _ string, _ review.Workspace) (review.Report, error) {
+func (d *deadlineProbe) Review(
+	ctx context.Context, _, _ string, _ review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	_, d.hadDeadline = ctx.Deadline()
-	return d.report, nil
+	return d.report, review.RunInfo{}, nil
 }
 
 // slowPublisher は、context が切れるまで粘って失敗する review.Publisher です。
@@ -705,5 +709,87 @@ func TestNewIgnoresNilOption(t *testing.T) {
 	h := newHarness(t)
 	if _, err := New(h.pipeline.deps, nil, WithPublishTimeout(time.Second), nil); err != nil {
 		t.Fatalf("nil Option でエラーになりました: %v", err)
+	}
+}
+
+// ★ 計測値は失敗した実行でも残ること。
+//
+// **上限が厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。**
+// 成功したときだけ数字が残る作りだと、分布の裾がいちばん見たいときに欠けます。
+func TestRunCarriesStatsIntoResult(t *testing.T) {
+	t.Parallel()
+
+	info := review.RunInfo{
+		Truncated:     true,
+		PromptTokens:  219062,
+		OutputTokens:  63950,
+		ThoughtTokens: 1579,
+		ToolCalls:     5,
+	}
+
+	tests := []struct {
+		name    string
+		arrange func(*harness)
+		want    review.Status
+	}{
+		{"成功", func(*harness) {}, review.StatusSucceeded},
+		{"AIレビューに失敗", func(h *harness) { h.reviewer.err = errBoom }, review.StatusFailed},
+		{"公開に失敗", func(h *harness) { h.publisher.err = errBoom }, review.StatusFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.reviewer.info = info
+			tt.arrange(h)
+
+			result, _, _ := h.pipeline.Run(context.Background(), testRequest())
+
+			if result.Status != tt.want {
+				t.Fatalf("Status = %q, want %q", result.Status, tt.want)
+			}
+			if result.DiffBytes != len(h.source.diff) {
+				t.Errorf("DiffBytes = %d, want %d", result.DiffBytes, len(h.source.diff))
+			}
+			if result.Run != info {
+				t.Errorf("Run = %+v, want %+v", result.Run, info)
+			}
+		})
+	}
+}
+
+// レビューへ到達しなかった実行でも、差分の大きさまでは残ること。
+// 上限に弾かれた実行こそ、どのくらい超えていたのかを後から見たい対象です。
+func TestRunRecordsDiffBytesWhenRejected(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t, WithMaxDiffBytes(16))
+	h.source.diff = strings.Repeat("a", 17)
+
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
+	if !errors.Is(err, review.ErrDiffTooLarge) {
+		t.Fatalf("err = %v, want ErrDiffTooLarge", err)
+	}
+	if result.DiffBytes != 17 {
+		t.Errorf("DiffBytes = %d, want 17", result.DiffBytes)
+	}
+	if result.Run != (review.RunInfo{}) {
+		t.Errorf("レビューしていないのに Run = %+v", result.Run)
+	}
+}
+
+// 差分が無い実行では、どちらもゼロ値であること。
+func TestRunLeavesStatsEmptyWhenSkipped(t *testing.T) {
+	t.Parallel()
+
+	h := newHarness(t)
+	h.source.diff = ""
+
+	result, _, err := h.pipeline.Run(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("Run が失敗しました: %v", err)
+	}
+	if result.DiffBytes != 0 || result.Run != (review.RunInfo{}) {
+		t.Errorf("スキップなのに DiffBytes = %d, Run = %+v", result.DiffBytes, result.Run)
 	}
 }

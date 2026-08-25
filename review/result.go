@@ -24,6 +24,16 @@ type Result struct {
 	PublicURL  string
 	Duration   time.Duration
 	Message    string
+
+	// DiffBytes は、AI へ送った差分の大きさです。差分を取れなかった場合は 0 です。
+	//
+	// 所要時間と併せて、上限（差分の大きさ・実行時間）を実測から調整するための材料に
+	// なります。**失敗した実行でも埋まります。** 上限が厳しすぎるかどうかを判断する材料は、
+	// 通った実行より弾かれた実行の側にあるためです。
+	DiffBytes int
+	// Run は、レビュアーが報告した実行の情報です。レビューまで到達しなかった場合は
+	// ゼロ値です。
+	Run RunInfo
 }
 
 // Published は、成果物がストレージへ公開されたかどうかを返します。

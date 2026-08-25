@@ -50,6 +50,25 @@ type Workspace struct {
 	Head string
 }
 
+// RunInfo は、レビュー 1 件の実行について、レポート本体には載らないことを伝えます。
+//
+// 上限（ツール呼び出し回数・出力トークン）を実測から調整するための材料と、結果が完全か
+// どうかです。**埋めるかどうかは実装に任せます。** 数えられない実装ではゼロ値のままです。
+type RunInfo struct {
+	// Truncated は、モデルの出力が途中で切れ、完結していた範囲だけを拾ったことを示します。
+	//
+	// ★ **このレポートは不完全です。** 完全なレビューとして保存・通知すると、読む側は
+	// 「指摘はこれで全部」と受け取ります（ParseInfo.Truncated から引き継ぐ想定です）。
+	Truncated bool
+
+	// 以下はモデルの使用量です。出力が上限へどれだけ近いかを後から追えます。
+	PromptTokens  int
+	OutputTokens  int
+	ThoughtTokens int
+	// ToolCalls は、レビュアーがツールを呼んだ回数です。
+	ToolCalls int
+}
+
 // WorkspaceReviewer は、プロンプトと作業ディレクトリからレビュー結果を返します。
 //
 // 差分の外（変更されなかったファイル、前後の章など）を実装が自分で調べるエージェント型を
@@ -58,7 +77,7 @@ type Workspace struct {
 // 戻り値が JSON 文字列ではなく Report なのは、デコードの責務を実装側に一度だけ持たせ、
 // 以降の層が生の文字列を再解釈しなくて済むようにするためです。
 type WorkspaceReviewer interface {
-	Review(ctx context.Context, model, prompt string, ws Workspace) (Report, error)
+	Review(ctx context.Context, model, prompt string, ws Workspace) (Report, RunInfo, error)
 }
 
 // Publisher は、レビュー結果を成果物として公開します。

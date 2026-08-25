@@ -128,7 +128,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	start := time.Now()
 
 	if err := req.Validate(); err != nil {
-		return p.fail(ctx, req, nil, review.WrapStep(review.StepValidate, err), time.Since(start))
+		return p.fail(ctx, req, outcome{}, nil, review.WrapStep(review.StepValidate, err), time.Since(start))
 	}
 
 	// 締切はレビュー本体にだけ被せます（範囲の理由は WithRunTimeout を参照）。
@@ -139,19 +139,20 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		defer cancel()
 	}
 
-	report, err := p.produce(runCtx, req)
+	out, err := p.produce(runCtx, req)
 	elapsed := time.Since(start)
+	report := out.report
 
 	switch {
 	case errors.Is(err, review.ErrEmptyDiff):
-		result := review.Skipped(req, elapsed)
+		result := out.into(review.Skipped(req, elapsed))
 		p.logger.InfoContext(ctx, "差分が無いためレビューをスキップしました",
 			"job_id", req.JobID, "repo_url", req.RepoURL, "base", req.Base, "head", req.Head)
 		p.notify(ctx, review.Notification{Request: req, Result: result})
 		return result, nil, nil
 
 	case err != nil:
-		return p.fail(ctx, req, nil, err, elapsed)
+		return p.fail(ctx, req, out, nil, err, elapsed)
 	}
 
 	publishCtx, cancel := p.detach(ctx)
@@ -161,10 +162,10 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		// レビュー自体は成立しているため、Report は返します。
 		// publishCtx ではなく ctx を渡します。公開が予算を使い切って失敗した場合、
 		// publishCtx は既に期限切れなので、そのまま通知へ渡すと必ず不達になります。
-		return p.fail(ctx, req, &report, review.WrapStep(review.StepPublish, err), elapsed)
+		return p.fail(ctx, req, out, &report, review.WrapStep(review.StepPublish, err), elapsed)
 	}
 
-	result := review.Succeeded(req, elapsed)
+	result := out.into(review.Succeeded(req, elapsed))
 	p.logger.InfoContext(ctx, "レビューパイプラインが完了しました",
 		"job_id", req.JobID,
 		"repo_url", req.RepoURL,
@@ -172,6 +173,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		"storage_uri", result.StorageURI,
 		"findings", len(report.Findings),
 		"duration", elapsed,
+		"truncated", result.Run.Truncated,
 	)
 	// 通知にも公開と別の予算を与えます。同じ context を使い回すと、公開に時間がかかった
 	// ぶんだけ通知の持ち時間が削られます。
@@ -180,59 +182,85 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	return result, &report, nil
 }
 
+// outcome は、produce が持ち帰る 1 回ぶんの結果です。
+//
+// レポートと一緒に計測値も返すのは、**失敗した実行でも数字を残すため**です。上限が
+// 厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。
+type outcome struct {
+	report    review.Report
+	diffBytes int
+	info      review.RunInfo
+}
+
+// into は、計測値を Result へ写します。
+func (o outcome) into(result review.Result) review.Result {
+	result.DiffBytes = o.diffBytes
+	result.Run = o.info
+	return result
+}
+
 // produce は、差分の取得から AI レビューまでを実行します。
-func (p *Pipeline) produce(ctx context.Context, req review.Request) (review.Report, error) {
+//
+// エラーを返す場合も、そこまでに分かった計測値は outcome に入れて返します。
+func (p *Pipeline) produce(ctx context.Context, req review.Request) (outcome, error) {
+	var out outcome
+
 	source, err := p.deps.Sources.Open(ctx, req)
 	if err != nil {
-		return review.Report{}, review.WrapStep(review.StepPrepare, err)
+		return out, review.WrapStep(review.StepPrepare, err)
 	}
 	defer p.close(ctx, source)
 
 	diff, err := source.Diff(ctx, req.Base, req.Head)
 	if err != nil {
-		return review.Report{}, review.WrapStep(review.StepDiff, err)
+		return out, review.WrapStep(review.StepDiff, err)
 	}
 	if strings.TrimSpace(diff) == "" {
-		return review.Report{}, review.ErrEmptyDiff
+		return out, review.ErrEmptyDiff
 	}
+	out.diffBytes = len(diff)
 
 	// ★ 大きすぎる差分は、送っても出力の途中切れか締切超過で失敗します。**どちらも
 	// モデルを呼び終えたあとにしか分かりません。** 送る前に落として、利用者が手を
 	// 打てる形で返します（切り詰めない理由は WithMaxDiffBytes）。
 	if p.maxDiffBytes > 0 && len(diff) > p.maxDiffBytes {
-		return review.Report{}, review.WrapStep(review.StepDiff, fmt.Errorf(
+		return out, review.WrapStep(review.StepDiff, fmt.Errorf(
 			"%w: %d バイト（上限 %d バイト）: base と head の範囲を狭めて再実行してください",
 			review.ErrDiffTooLarge, len(diff), p.maxDiffBytes))
 	}
 
 	prompt, err := p.deps.Prompts.Generate(req.Mode, diff)
 	if err != nil {
-		return review.Report{}, review.WrapStep(review.StepPrompt, err)
+		return out, review.WrapStep(review.StepPrompt, err)
 	}
 
 	p.logger.InfoContext(ctx, "AIレビューを実行します", "mode", req.Mode, "model", req.Model, "diff_bytes", len(diff))
 
-	return p.review(ctx, source, req, prompt)
+	out.report, out.info, err = p.review(ctx, source, req, prompt)
+	return out, err
 }
 
 // review は、Head をチェックアウトしたうえで AI レビューを実行します。
-func (p *Pipeline) review(ctx context.Context, source review.DiffSource, req review.Request, prompt string) (review.Report, error) {
+func (p *Pipeline) review(
+	ctx context.Context, source review.DiffSource, req review.Request, prompt string,
+) (review.Report, review.RunInfo, error) {
 	// Head を明示的にチェックアウトします（理由は review.Workspace のドキュメントを参照）。
 	// これを省くと、レビュアーは前回の実行が残した別参照の内容を読んでしまいます。
 	dir, err := source.CheckoutHead(ctx, req.Head)
 	if err != nil {
-		return review.Report{}, review.WrapStep(review.StepCheckout, err)
+		return review.Report{}, review.RunInfo{}, review.WrapStep(review.StepCheckout, err)
 	}
 
-	report, err := p.deps.WorkspaceReviewer.Review(ctx, req.Model, prompt, review.Workspace{
+	report, info, err := p.deps.WorkspaceReviewer.Review(ctx, req.Model, prompt, review.Workspace{
 		Dir:  dir,
 		Base: req.Base,
 		Head: req.Head,
 	})
 	if err != nil {
-		return review.Report{}, review.WrapStep(review.StepReview, err)
+		// 失敗しても計測値は持ち帰ります。**トークンは既に消費されています。**
+		return review.Report{}, info, review.WrapStep(review.StepReview, err)
 	}
-	return report, nil
+	return report, info, nil
 }
 
 // close は DiffSource を解放します。
@@ -269,11 +297,12 @@ func (p *Pipeline) detach(ctx context.Context) (context.Context, context.CancelF
 func (p *Pipeline) fail(
 	ctx context.Context,
 	req review.Request,
+	out outcome,
 	report *review.Report,
 	err error,
 	elapsed time.Duration,
 ) (review.Result, *review.Report, error) {
-	result := review.Failed(req, elapsed, err)
+	result := out.into(review.Failed(req, elapsed, err))
 
 	p.logger.ErrorContext(ctx, "レビューパイプラインが失敗しました",
 		"job_id", req.JobID, "repo_url", req.RepoURL, "step", review.StepOf(err), "error", err)

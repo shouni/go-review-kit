@@ -51,8 +51,12 @@ Hexagonal (ports and adapters), strictly layered:
   this module. Holds the domain types (`Request`, `Report`/`Verdict`/`Finding`/`Severity`/`Decision`,
   `Result`/`Status`), the sentinel errors (`ErrEmptyDiff`, `ErrDiffTooLarge`, `ErrRefNotFound`,
   `ErrInvalidReport`, …), `StepError` (which carries the failing step name — there is no separate
-  step field anywhere), and every port. Ports are deliberately 1–2 methods each:
-  `WorkspaceReviewer` (the only reviewer kind — it inspects the checked-out worktree),
+  step field anywhere), and every port. `ParseReport` returns a `ParseInfo` alongside the report,
+  saying whether the output had to be repaired (nothing lost) or was truncated and only partly
+  recovered (**data dropped** — a caller ignoring `Truncated` publishes an incomplete review as a
+  complete one). Ports are deliberately 1–2 methods each:
+  `WorkspaceReviewer` (the only reviewer kind — it inspects the checked-out worktree and
+  reports a `RunInfo` alongside the report),
   `DiffSource` (`Diff` + `CheckoutHead` + `Close`), `DiffSourceFactory`, `PromptGenerator`,
   `Publisher`, `Notifier`.
   Changing a signature here ripples into every adapter and into `adk-review` — check that repo

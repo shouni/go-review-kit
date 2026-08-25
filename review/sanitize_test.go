@@ -138,9 +138,15 @@ func TestParseReportRecoversFromModelNoise(t *testing.T) {
 		`"findings":[{"severity":"Minor","file":"x.go","excerpt":"regexp.MustCompile(\d+)","message":"m"}]}` +
 		"\n```"
 
-	report, err := ParseReport([]byte(raw))
+	report, info, err := ParseReport([]byte(raw))
 	if err != nil {
 		t.Fatalf("ParseReport() = %v, want nil", err)
+	}
+	if !info.Repaired {
+		t.Error("補修を通ったのに ParseInfo.Repaired が false です")
+	}
+	if info.Truncated {
+		t.Error("切れていないのに ParseInfo.Truncated が true です")
 	}
 	if report.Title != "レビュー" {
 		t.Errorf("Title = %q", report.Title)
@@ -157,11 +163,66 @@ func TestParseReportRecoversFromModelNoise(t *testing.T) {
 func TestParseReportKeepsOriginalError(t *testing.T) {
 	t.Parallel()
 
-	_, err := ParseReport([]byte(`{"title":`))
+	_, _, err := ParseReport([]byte(`{"title":`))
 	if err == nil {
 		t.Fatal("エラーを期待しました")
 	}
 	if !strings.Contains(err.Error(), "JSONとして解釈できません") {
 		t.Errorf("err = %v", err)
+	}
+}
+
+// 出力の上限に当たって途中で切れた応答から、完結していた指摘だけを拾えること。
+//
+// ★ 実測で、10.7 KiB の差分に対して 212 KB を書いた末に切れ、**完成していた Blocker の
+// 指摘ごと**失われた例があります。全損にせず、切れたことを添えて返します。
+func TestParseReportSalvagesTruncatedOutput(t *testing.T) {
+	t.Parallel()
+
+	// 2 件目の途中で切れています（文字列の内側で終わっています）。
+	raw := `{"title":"レビュー","summary":"要約","verdict":{"decision":"Blocker","reason":"r"},` +
+		`"findings":[{"severity":"Blocker","file":"a.go","excerpt":"x","message":"m1"},` +
+		`{"severity":"Minor","file":"b.go","excerpt":"y","mess`
+
+	report, info, err := ParseReport([]byte(raw))
+	if err != nil {
+		t.Fatalf("ParseReport() = %v, want nil", err)
+	}
+	if !info.Truncated {
+		t.Error("切れているのに ParseInfo.Truncated が false です")
+	}
+	if report.Verdict.Decision != DecisionBlocker {
+		t.Errorf("Decision = %q, want %q", report.Verdict.Decision, DecisionBlocker)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("findings = %d, want 1（完結していた 1 件だけ）", len(report.Findings))
+	}
+	if report.Findings[0].Message != "m1" {
+		t.Errorf("findings[0].Message = %q, want m1", report.Findings[0].Message)
+	}
+}
+
+// 完結している出力では救出を働かせないこと。**拾える範囲まで戻す操作はデータを落とすので、
+// 出番が無いときに動くと、正常な結果から末尾が消えます。**
+func TestParseReportDoesNotSalvageCompleteOutput(t *testing.T) {
+	t.Parallel()
+
+	_, info, err := ParseReport([]byte(validReportJSON))
+	if err != nil {
+		t.Fatalf("ParseReport() = %v, want nil", err)
+	}
+	if info.Repaired || info.Truncated {
+		t.Errorf("そのまま読めた入力で ParseInfo = %+v", info)
+	}
+}
+
+// 頭から壊れていて拾える範囲が無いものは、救出せずエラーにすること。
+func TestParseReportRejectsUnsalvageableOutput(t *testing.T) {
+	t.Parallel()
+
+	// verdict まで到達する前に切れています。
+	_, _, err := ParseReport([]byte(`{"title":"レビュー","summary":"よ`))
+	if err == nil {
+		t.Fatal("エラーを期待しました")
 	}
 }

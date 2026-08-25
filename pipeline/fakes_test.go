@@ -116,6 +116,7 @@ func (f *fakePrompts) Generate(mode, diff string) (string, error) {
 // fakeReviewer は review.WorkspaceReviewer のテスト実装です。
 type fakeReviewer struct {
 	report review.Report
+	info   review.RunInfo
 	err    error
 
 	called    bool
@@ -124,13 +125,16 @@ type fakeReviewer struct {
 	gotWS     review.Workspace
 }
 
-func (f *fakeReviewer) Review(_ context.Context, model, prompt string, ws review.Workspace) (review.Report, error) {
+func (f *fakeReviewer) Review(
+	_ context.Context, model, prompt string, ws review.Workspace,
+) (review.Report, review.RunInfo, error) {
 	f.called = true
 	f.gotModel, f.gotPrompt, f.gotWS = model, prompt, ws
 	if f.err != nil {
-		return review.Report{}, f.err
+		// 失敗してもトークンは消費済みなので、計測値は返します。
+		return review.Report{}, f.info, f.err
 	}
-	return f.report, nil
+	return f.report, f.info, nil
 }
 
 // fakePublisher は review.Publisher のテスト実装です。

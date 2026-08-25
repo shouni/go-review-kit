@@ -211,3 +211,82 @@ func isJSONEscape(c byte) bool {
 		return false
 	}
 }
+
+// salvageJSON は、途中で切れた JSON から、完結している範囲だけを取り出します。
+// 取り出せなければ nil を返します。
+//
+// ★ **これは補修ではなく切り捨てです。** SanitizeJSON が「解釈できる入力は 1 バイトも
+// 変えない・悪化させない」を守るのに対し、こちらは**データを落とします。** 分けてあるのは
+// そのためで、呼び出し側が落ちたことを知らないまま完全な結果として扱えないよう、
+// ParseReport は ParseInfo.Truncated で必ず知らせます。
+//
+// 出力の上限に当たったモデルは、文の途中でぷつりと止まります。そこまでに書けていた
+// 指摘は正しい JSON として並んでいるので、**最後に閉じ終えた要素まで戻して、開いたままの
+// 括弧を閉じれば読めます。** 実測では、10.7 KiB の差分に対して 212 KB を書いた末に切れ、
+// 完成していた Blocker の指摘ごと失われた例があります。
+//
+// 戻る先は必ず文字列の外です。壊れたエスケープや閉じていない引用符を持ち帰りません。
+func salvageJSON(data []byte) []byte {
+	start := firstJSONStart(data)
+	if start < 0 {
+		return nil
+	}
+
+	var stack []byte
+	// lastSafe は、入れ子の値を閉じ終えた直後の位置です。ここまで戻れば、要素の途中でも
+	// 文字列の途中でもない地点に着きます。
+	lastSafe := -1
+	var stackAtSafe int
+
+	inString, escaped := false, false
+	for i := start; i < len(data); i++ {
+		c := data[i]
+
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch c {
+		case '"':
+			inString = true
+		case '{', '[':
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				return nil
+			}
+			stack = stack[:len(stack)-1]
+			// 一番外側が閉じたなら切れていません。救出の出番ではないので譲ります。
+			if len(stack) == 0 {
+				return nil
+			}
+			lastSafe, stackAtSafe = i+1, len(stack)
+		}
+	}
+
+	if lastSafe < 0 {
+		return nil
+	}
+
+	out := make([]byte, 0, lastSafe-start+stackAtSafe)
+	out = append(out, data[start:lastSafe]...)
+	for i := stackAtSafe - 1; i >= 0; i-- {
+		if stack[i] == '{' {
+			out = append(out, '}')
+		} else {
+			out = append(out, ']')
+		}
+	}
+	if !json.Valid(out) {
+		return nil
+	}
+	return out
+}

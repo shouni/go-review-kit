@@ -1,6 +1,7 @@
 package review
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -103,34 +104,85 @@ type Report struct {
 	Findings []Finding `json:"findings"`
 }
 
+// ParseInfo は、モデルの出力をそのまま読めなかった場合に、何をしてまで読んだかを伝えます。
+//
+// **見なければ、起きたことはどこにも残りません。** 特に Truncated を無視すると、
+// 途中で切れたレビューを完全なものとして公開することになります。
+type ParseInfo struct {
+	// Repaired は、SanitizeJSON の補修を通したことを示します。内容は失われていません。
+	Repaired bool
+	// Truncated は、出力が途中で切れていたため、完結していた範囲だけを拾ったことを示します。
+	//
+	// ★ **このレポートは不完全です。** 切れた先に指摘が何件あったかは分かりません。
+	// 完全なレビューとして扱うと、読む側は「指摘はこれで全部」と受け取ります。
+	// 成果物や通知にその旨を残してください。
+	Truncated bool
+}
+
 // ParseReport は、AI が返した JSON を Report へデコードし、検証します。
 //
-// そのまま解釈できなかった場合にかぎり SanitizeJSON を通してもう一度試します。
-// 構造化出力を指定してもモデルはフェンスや後書き、エスケープし忘れたバックスラッシュを
-// 混ぜることがあり、**応答を返しきったあとの崩れなので API の再試行では直りません。**
-// 補修しても解釈できなければ、元の入力に対するエラーをそのまま返します。
-func ParseReport(data []byte) (Report, error) {
+// 段階は 3 つあり、後ろほど失うものが大きくなります。
+//
+//  1. そのまま解釈する
+//  2. SanitizeJSON で補修して解釈する（内容は落ちません。ParseInfo.Repaired）
+//  3. 途中で切れたとみなし、完結している範囲だけを拾う（**内容が落ちます**。ParseInfo.Truncated）
+//
+// 2 と 3 が要るのは、構造化出力を指定してもモデルがフェンスや後書き、エスケープし忘れた
+// バックスラッシュを混ぜたり、出力の上限に当たって文の途中で止まったりするためです。
+// **どれも応答を返しきったあとの話なので、API の再試行では直りません。**
+//
+// どの段階を通ったかは戻り値の ParseInfo でしか分かりません。
+func ParseReport(data []byte) (Report, ParseInfo, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
-		return Report{}, ErrEmptyResponse
+		return Report{}, ParseInfo{}, ErrEmptyResponse
 	}
 
-	var report Report
-	if err := json.Unmarshal(data, &report); err != nil {
-		cleaned := SanitizeJSON(data)
-		if len(cleaned) == len(data) && string(cleaned) == string(data) {
-			return Report{}, fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
-		}
-		if err2 := json.Unmarshal(cleaned, &report); err2 != nil {
-			// 補修後のエラーではなく元のエラーを返します。呼び出し側が見たいのは
-			// モデルが実際に返したものの壊れ方で、補修の途中経過ではありません。
-			return Report{}, fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
-		}
+	report, info, err := decodeReport(data)
+	if err != nil {
+		return Report{}, ParseInfo{}, err
 	}
-
 	if err := report.Validate(); err != nil {
-		return Report{}, err
+		return Report{}, info, err
 	}
-	return report, nil
+	return report, info, nil
+}
+
+// decodeReport は、必要なら補修と切り出しを経て JSON を Report へ写します。
+func decodeReport(data []byte) (Report, ParseInfo, error) {
+	var report Report
+	err := json.Unmarshal(data, &report)
+	if err == nil {
+		return report, ParseInfo{}, nil
+	}
+
+	// 返すのは常に**元の入力に対する**エラーです。呼び出し側が見たいのはモデルが実際に
+	// 返したものの壊れ方で、補修や切り出しの途中経過ではありません。
+	invalid := fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
+
+	var info ParseInfo
+	if cleaned := SanitizeJSON(data); !bytes.Equal(cleaned, data) {
+		info.Repaired = true
+		data = cleaned
+
+		var repaired Report
+		if err := json.Unmarshal(data, &repaired); err == nil {
+			return repaired, info, nil
+		}
+	}
+
+	// 補修しても読めないなら、切れている可能性を見ます。切り出しは補修後の内容に対して
+	// 行います（壊れたエスケープを含んだままでは、拾った範囲も読めません）。
+	salvaged := salvageJSON(data)
+	if salvaged == nil {
+		return Report{}, ParseInfo{}, invalid
+	}
+
+	var partial Report
+	if err := json.Unmarshal(salvaged, &partial); err != nil {
+		return Report{}, ParseInfo{}, invalid
+	}
+	info.Truncated = true
+	return partial, info, nil
 }
 
 // Validate は、レポートが最低限の体裁を満たしているかを検証します。
