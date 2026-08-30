@@ -61,7 +61,7 @@ func (d Deps) validate() error {
 // isNil は、インターフェース値が nil か、nil ポインタを収めているかを返します。
 //
 // 素の `== nil` では後者を見逃します。生成に失敗した実装（(*T)(nil)）を渡されると
-// 検証を素通りし、**最初に呼んだ時点で nil ポインタ参照**になります。依存の検証は
+// 検証を素通りし、最初に呼んだ時点で nil ポインタ参照になります。依存の検証は
 // 「起動時に落とす」ためにあるので、そこで捕まえます。
 func isNil(v any) bool {
 	if v == nil {
@@ -114,7 +114,7 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 // 戻り値の Report は、AI がレビューを返した場合のみ非 nil です。差分が無かった場合や、
 // レビューへ到達する前に失敗した場合は nil になります。保存に失敗した場合は Report が
 // 非 nil のままエラーも返るので、「レビューはできたが残せなかった」を呼び出し側で
-// 区別できます。**戻り値を使う前に nil を確かめてください。**
+// 区別できます。戻り値を使う前に nil を確かめてください。
 //
 // Report を返すのは、レビューの中身（題目・判定・指摘）を必要とする処理を通知フックへ
 // 相乗りさせずに済ませるためです。ジョブの状態を記録する呼び出し側が、通知を名乗る
@@ -184,7 +184,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 
 // outcome は、produce が持ち帰る 1 回ぶんの結果です。
 //
-// レポートと一緒に計測値も返すのは、**失敗した実行でも数字を残すため**です。上限が
+// レポートと一緒に計測値も返すのは、失敗した実行でも数字を残すためです。上限が
 // 厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。
 type outcome struct {
 	report    review.Report
@@ -220,8 +220,8 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (outcome, er
 	}
 	out.diffBytes = len(diff)
 
-	// ★ 大きすぎる差分は、送っても出力の途中切れか締切超過で失敗します。**どちらも
-	// モデルを呼び終えたあとにしか分かりません。** 送る前に落として、利用者が手を
+	// ★ 大きすぎる差分は、送っても出力の途中切れか締切超過で失敗します。どちらも
+	// モデルを呼び終えたあとにしか分かりません。送る前に落として、利用者が手を
 	// 打てる形で返します（切り詰めない理由は WithMaxDiffBytes）。
 	if p.maxDiffBytes > 0 && len(diff) > p.maxDiffBytes {
 		return out, review.WrapStep(review.StepDiff, fmt.Errorf(
@@ -257,7 +257,7 @@ func (p *Pipeline) review(
 		Head: req.Head,
 	})
 	if err != nil {
-		// 失敗しても計測値は持ち帰ります。**トークンは既に消費されています。**
+		// 失敗しても計測値は持ち帰ります。トークンは既に消費されています。
 		return review.Report{}, info, review.WrapStep(review.StepReview, err)
 	}
 	return report, info, nil
@@ -280,8 +280,8 @@ func (p *Pipeline) close(ctx context.Context, source review.DiffSource) {
 // context を返します。
 //
 // ★ 公開・通知・後始末がここを通ります。呼び出し元の context をそのまま使うと、
-// レビューが締切で打ち切られた直後は既に期限切れなので、**失敗を報告する通知や
-// 作業ディレクトリの後始末まで道連れで失敗します。** いちばん報告が必要な場面でだけ
+// レビューが締切で打ち切られた直後は既に期限切れなので、失敗を報告する通知や
+// 作業ディレクトリの後始末まで道連れで失敗します。いちばん報告が必要な場面でだけ
 // 届かない、という裏返った挙動になります。
 //
 // 呼び出しごとに新しく取ります。使い回すと、公開に時間がかかったぶんだけ通知の
@@ -292,7 +292,7 @@ func (p *Pipeline) detach(ctx context.Context) (context.Context, context.CancelF
 
 // fail は、失敗を通知したうえで失敗の Result を返します。
 //
-// ★ 受け取るのは **呼び出し元の context** です。切り離しは notify が自分で行うので、
+// ★ 受け取るのは呼び出し元の context です。切り離しは notify が自分で行うので、
 // 切り離し済みのものを渡さないでください（理由は detach のコメント）。
 func (p *Pipeline) fail(
 	ctx context.Context,

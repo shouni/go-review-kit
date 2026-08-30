@@ -216,7 +216,7 @@ func (g *GoGit) commit(ref string) (*object.Commit, error) {
 //
 // ★ 「候補が無かった」と「読もうとして失敗した」を区別します。すべて ErrRefNotFound へ
 // 畳むと、リポジトリの破損やディスク障害まで「参照が見つかりません: main」として出て、
-// **番兵そのものが嘘をつきます。** 不在以外のエラーに当たったら最初の 1 件を返します。
+// 番兵そのものが嘘をつきます。不在以外のエラーに当たったら最初の 1 件を返します。
 func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 	if ref == "" {
 		return plumbing.ZeroHash, fmt.Errorf("%w: 参照名が空です", review.ErrRefNotFound)
@@ -238,8 +238,8 @@ func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 		if candidate.isBranch {
 			name := plumbing.NewRemoteReferenceName(remoteName, localBranchName(candidate.ref))
 			// resolved=true にします。false だとシンボリック参照（origin/HEAD など）で
-			// Hash() が ZeroHash を返し、**エラー無しで空のハッシュが解決結果として
-			// 通ってしまいます。**
+			// Hash() が ZeroHash を返し、エラー無しで空のハッシュが解決結果として
+			// 通ってしまいます。
 			reference, err := g.repo.Reference(name, true)
 			if err != nil {
 				keep(err)

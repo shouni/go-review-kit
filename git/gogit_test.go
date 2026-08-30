@@ -181,7 +181,7 @@ func TestGoGitPrepareFailsForUnknownRepo(t *testing.T) {
 // シンボリック参照が空のハッシュとして通らないこと。
 //
 // Reference を resolved=false で引くと、origin/HEAD のようなシンボリック参照では
-// Hash() が ZeroHash を返し、**エラー無しで空のハッシュが解決結果になります。**
+// Hash() が ZeroHash を返し、エラー無しで空のハッシュが解決結果になります。
 func TestGoGitResolveSkipsSymbolicRef(t *testing.T) {
 	repo := newTestRepo(t)
 	ctx := context.Background()
