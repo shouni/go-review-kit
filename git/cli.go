@@ -18,7 +18,7 @@ import (
 //
 // -x（無視ファイルも消す）と 2 つ目の -f（ネストした git リポジトリも消す）が要ります。
 // これらが無いと、.gitignore に載る名前（node_modules/ や .env など）とベンダリングされた
-// リポジトリが残り、**前回の実行の残骸が head の内容としてレビュアーに読まれます**。
+// リポジトリが残り、前回の実行の残骸が head の内容としてレビュアーに読まれます。
 var cleanArgs = []string{"clean", "-f", "-f", "-d", "-x"}
 
 // killGrace は、context のキャンセル後に git の後片付けを待つ猶予です。
@@ -166,7 +166,7 @@ func (c *CLI) CheckoutHead(ctx context.Context, head string) (string, error) {
 //
 // ★ 掃除を先に、フェッチを後に行います。後始末の先頭にネットワーク I/O を置くと、
 // レビュー末尾で通信が落ちていたり締切を使い切っていたりしたときに、
-// **作業ツリーが head のまま・未追跡ファイルも残ったまま**次回へ持ち越されます。
+// 作業ツリーが head のまま・未追跡ファイルも残ったまま次回へ持ち越されます。
 // フェッチは次回の参照解決を新しく保つための best-effort なので、失敗しても
 // 後始末そのものは成立させます。
 func (c *CLI) Close(ctx context.Context) error {

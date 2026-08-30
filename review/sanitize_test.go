@@ -174,8 +174,8 @@ func TestParseReportKeepsOriginalError(t *testing.T) {
 
 // 出力の上限に当たって途中で切れた応答から、完結していた指摘だけを拾えること。
 //
-// ★ 実測で、10.7 KiB の差分に対して 212 KB を書いた末に切れ、**完成していた Blocker の
-// 指摘ごと**失われた例があります。全損にせず、切れたことを添えて返します。
+// ★ 実測で、10.7 KiB の差分に対して 212 KB を書いた末に切れ、完成していた Blocker の
+// 指摘ごと失われた例があります。全損にせず、切れたことを添えて返します。
 func TestParseReportSalvagesTruncatedOutput(t *testing.T) {
 	t.Parallel()
 
@@ -202,8 +202,8 @@ func TestParseReportSalvagesTruncatedOutput(t *testing.T) {
 	}
 }
 
-// 完結している出力では救出を働かせないこと。**拾える範囲まで戻す操作はデータを落とすので、
-// 出番が無いときに動くと、正常な結果から末尾が消えます。**
+// 完結している出力では救出を働かせないこと。拾える範囲まで戻す操作はデータを落とすので、
+// 出番が無いときに動くと、正常な結果から末尾が消えます。
 func TestParseReportDoesNotSalvageCompleteOutput(t *testing.T) {
 	t.Parallel()
 

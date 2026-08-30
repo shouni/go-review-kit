@@ -86,7 +86,7 @@ func sshUsername(repoURL string) (string, error) {
 
 // validateRepoURL は、このパッケージが扱えるリポジトリURLかを確かめます。
 //
-// **認証は SSH 鍵だけを扱います**（WithSSHKey → GIT_SSH_COMMAND / go-git の PublicKeys）。
+// 認証は SSH 鍵だけを扱います（WithSSHKey → GIT_SSH_COMMAND / go-git の PublicKeys）。
 // http(s) には資格情報を渡す経路が無く、公開リポジトリへ匿名で繋がるだけなので、
 // 「対応しているように見えて private では必ず失敗する」状態になります。ここで
 // 明示的に断り、利用者が形式を直せるようにします。

@@ -685,7 +685,7 @@ func TestValidateRejectsTypedNilDependency(t *testing.T) {
 
 // typed-nil のレビュアーは未設定として弾くこと。
 //
-// 素の == nil では見逃すため、通すと**最初に呼んだ時点で nil ポインタ参照**になります。
+// 素の == nil では見逃すため、通すと最初に呼んだ時点で nil ポインタ参照になります。
 func TestValidateTreatsTypedNilReviewerAsUnset(t *testing.T) {
 	t.Parallel()
 
@@ -714,7 +714,7 @@ func TestNewIgnoresNilOption(t *testing.T) {
 
 // ★ 計測値は失敗した実行でも残ること。
 //
-// **上限が厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。**
+// 上限が厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。
 // 成功したときだけ数字が残る作りだと、分布の裾がいちばん見たいときに欠けます。
 func TestRunCarriesStatsIntoResult(t *testing.T) {
 	t.Parallel()

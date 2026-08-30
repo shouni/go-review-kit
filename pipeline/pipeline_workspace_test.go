@@ -10,7 +10,7 @@ import (
 // レビュアーが受け取る作業ディレクトリは、Head をチェックアウトした状態であること。
 //
 // Diff は作業ツリーに触れずオブジェクト比較だけで差分を作るため、チェックアウトを省くと
-// **レビュアーは前回の実行が残した別参照の内容を読みます。**
+// レビュアーは前回の実行が残した別参照の内容を読みます。
 func TestRunChecksOutHeadBeforeReview(t *testing.T) {
 	h := newHarness(t)
 	req := testRequest()
