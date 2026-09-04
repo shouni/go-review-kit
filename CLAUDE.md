@@ -12,11 +12,14 @@ diffs: open a repo, extract a diff between two refs, check out the head, run a c
 It is consumed by the downstream app `adk-review` (Web/Worker), which supplies the concrete
 adapters and owns the process entrypoint.
 
-`README.md` has a 動作の約束 section listing the guarantees callers are allowed to rely on (empty
-diff is not a failure, Publisher only runs on success, Notifier runs exactly once per `Run`, publish
-and notify each detach from the caller's deadline with their own budget). Those are contract, not
-incidental behaviour — read it before changing `pipeline`. It names no consuming repository and
-pins no model version: both go stale, and the consumer list lives in `public-docs/libraries.md`.
+The guarantees callers may rely on are contract, not incidental behaviour, and each lives on the
+symbol it belongs to: `review.Notifier` (runs exactly once per `Run`; a notify failure never fails
+the pipeline), `review.Publisher` (success only; the working tree is already released),
+`pipeline.WithRunTimeout` (publish and notify detach from the caller's deadline with their own
+budget), `review.ErrEmptyDiff` / `ErrDiffTooLarge` (empty is not a failure, too large is).
+**Read those doc comments before changing `pipeline`**, and keep them current — the README no
+longer restates them. The README names no consuming repository and pins no model version: both go
+stale, and the consumer list lives in `public-docs/libraries.md`.
 
 ## Commands
 
@@ -110,8 +113,9 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only �
 - Keep `README.md`'s package table and sequence diagram in sync with `review`/`pipeline` — they are
   the authoritative architecture reference. The diagram is easy to let drift: `DiffSource.Close`
   runs on `produce`'s defer, so it fires *before* publish, not after. The per-file project tree it
-  used to carry is gone: it restated the package layout godoc already shows, and the README's job
-  is the 動作の約束, not a directory listing.
+  used to carry is gone: it restated the package layout godoc already shows. The README's job is
+  orientation and the SSH-only constraint, not a directory listing and not the contract — that
+  belongs on the symbols.
 - This module is consumed via semver tags (no `replace` directive). A breaking change here
   (e.g. removing/renaming an exported `review` type or a constructor like `git.NewCLIFactory`)
   requires: commit → tag a new version → bump `go.mod` in `adk-review` → fix its call sites.
