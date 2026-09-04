@@ -123,7 +123,9 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 // 差分が無かった場合は StatusSkipped の Result と nil を返します（失敗ではないため）。
 // 「実行はしたが成果物は無い」は Result.Published で判別できます。
 //
-// 締切の掛かる範囲は detach と WithRunTimeout / WithPublishTimeout を参照してください。
+// 保存・通知・後始末は呼び出し元の締切から切り離して実行されるため、レビューが
+// タイムアウトで打ち切られた直後でも失敗の記録と通知は届きます。締切の掛かる範囲は
+// WithRunTimeout / WithPublishTimeout を参照してください。
 func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, *review.Report, error) {
 	start := time.Now()
 

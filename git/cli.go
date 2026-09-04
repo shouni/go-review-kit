@@ -54,6 +54,15 @@ func NewCLI(localPath string, opts ...Option) (*CLI, error) {
 }
 
 // Prepare は、リポジトリをクローン（既にあればそのまま利用）し、リモートの最新を取得します。
+//
+// 受け付けるリポジトリURLは SSH 形式だけです。scp 形式（git@host:owner/repo.git）、
+// ssh:// スキーム（ssh://[user@]host/owner/repo.git）、および開発とテスト用の
+// ローカルパスの 3 形式を受け付けます。
+//
+// http(s) は形式のエラーとして断り、review.ErrUnsupportedRepoURL を包んだエラーを
+// 返します（クローンは試みません）。認証は SSH 鍵だけを扱うため http(s) には資格情報を
+// 渡す経路が無く、公開リポジトリへ匿名で繋がるだけで private では必ず失敗するためです。
+// 形式のエラーにしておくと、利用者が認証の失敗として調べずに済みます。
 func (c *CLI) Prepare(ctx context.Context, repoURL string) error {
 	if err := validateRepoURL(repoURL); err != nil {
 		return err
