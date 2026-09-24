@@ -45,7 +45,16 @@ go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 ```
 
 There is no Makefile. CI (`.github/workflows/ci.yml`) runs Build & Test, Lint, and govulncheck as
-separate jobs on every push/PR to `main`/`develop`.
+separate jobs on every push/PR to `main`/`develop`, plus two fuzz targets for 60s each:
+`review#FuzzSanitizeJSON` and `review#FuzzParseReport`. Those two functions are where model output —
+arbitrary bytes from outside — meets hand-written scanning over backslashes, control characters and
+bracket depth, which is the shape a table test under-covers. **`FuzzSanitizeJSON` pins the
+never-worsen rule**: if the repair changed the input at all, the result must be valid JSON, and
+already-valid input must come back byte-identical. Leave the input alone rather than hand back
+something that parses differently from what the model actually said. `FuzzParseReport` pins that a
+successful parse always satisfies `Validate`, and that `ParseInfo.Repaired` / `Truncated` stay false
+for input that was valid to begin with — a missed `Truncated` publishes a half-finished review as a
+complete one.
 
 ## Architecture
 

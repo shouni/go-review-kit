@@ -17,3 +17,7 @@ permissions:
 jobs:
   ci:
     uses: shouni/workflows/.github/workflows/go-ci.yml@v1
+    with:
+      # 補修とデコードはモデル出力（外部入力）を手書きで走査する。探索を毎回回す。
+      fuzz-targets: "./review#FuzzSanitizeJSON ./review#FuzzParseReport"
+      fuzz-time: 60s
