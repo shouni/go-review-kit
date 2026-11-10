@@ -6,8 +6,8 @@ import (
 	"testing"
 )
 
-// 既に解釈できる入力は 1 バイトも変えないこと。
-// 変えてしまうと、正常系まで補修の影響を受けます。
+// Input that can already be interpreted is not changed by a single byte.
+// Changing it would let the repair affect the normal path too.
 func TestSanitizeJSONLeavesValidInputAlone(t *testing.T) {
 	t.Parallel()
 
@@ -19,12 +19,12 @@ func TestSanitizeJSONLeavesValidInputAlone(t *testing.T) {
 		`  {"title":"a"}  `,
 	} {
 		if got := string(SanitizeJSON([]byte(in))); got != in {
-			t.Errorf("SanitizeJSON(%q) = %q, 変えないでください", in, got)
+			t.Errorf("SanitizeJSON(%q) = %q, must not be changed", in, got)
 		}
 	}
 }
 
-// モデルが混ぜがちな崩れを補修できること。
+// The breakages the model tends to mix in can be repaired.
 func TestSanitizeJSONRepairs(t *testing.T) {
 	t.Parallel()
 
@@ -32,19 +32,19 @@ func TestSanitizeJSONRepairs(t *testing.T) {
 		name string
 		in   string
 	}{
-		{name: "Markdown フェンス", in: "```json\n{\"title\":\"a\"}\n```"},
-		{name: "末尾の説明文", in: `{"title":"a"} 以上がレビュー結果です。`},
-		{name: "余分な閉じ括弧", in: `{"title":"a"}}`},
-		{name: "先頭の前置き", in: `結果は次のとおりです: {"title":"a"}`},
-		// ★ 今回踏んだ形。ソースの正規表現を excerpt へ引用すると出ます。
-		{name: "エスケープし忘れ（\\d）", in: `{"excerpt":"regexp.MustCompile(\d+)"}`},
-		{name: "エスケープし忘れ（空白）", in: `{"excerpt":"path\ name"}`},
-		// ★ 複数行の引用。改行をエスケープせずに入れてくる形です。
-		{name: "生の改行", in: "{\"excerpt\":\"一行目\n二行目\"}"},
-		{name: "生のタブ", in: "{\"excerpt\":\"\tif err != nil {\"}"},
-		{name: "生の改行とフェンス", in: "```json\n{\"excerpt\":\"一行目\n二行目\"}\n```"},
-		{name: "生の改行とバックスラッシュ", in: "{\"excerpt\":\"re := regexp.MustCompile(\\d+)\n次の行\"}"},
-		{name: "配列ルート", in: "```json\n[{\"a\":1}]\n```"},
+		{name: "Markdown fence", in: "```json\n{\"title\":\"a\"}\n```"},
+		{name: "trailing remarks", in: `{"title":"a"} 以上がレビュー結果です。`},
+		{name: "extra closing bracket", in: `{"title":"a"}}`},
+		{name: "leading preamble", in: `結果は次のとおりです: {"title":"a"}`},
+		// ★ The shape actually hit. It appears when a regular expression from the source is quoted into an excerpt.
+		{name: "unescaped backslash (\\d)", in: `{"excerpt":"regexp.MustCompile(\d+)"}`},
+		{name: "unescaped backslash (space)", in: `{"excerpt":"path\ name"}`},
+		// ★ A multi-line quote, with the newlines put in unescaped.
+		{name: "raw newline", in: "{\"excerpt\":\"一行目\n二行目\"}"},
+		{name: "raw tab", in: "{\"excerpt\":\"\tif err != nil {\"}"},
+		{name: "raw newline and fence", in: "```json\n{\"excerpt\":\"一行目\n二行目\"}\n```"},
+		{name: "raw newline and backslash", in: "{\"excerpt\":\"re := regexp.MustCompile(\\d+)\n次の行\"}"},
+		{name: "array root", in: "```json\n[{\"a\":1}]\n```"},
 	}
 
 	for _, tt := range tests {
@@ -53,14 +53,14 @@ func TestSanitizeJSONRepairs(t *testing.T) {
 
 			got := SanitizeJSON([]byte(tt.in))
 			if !json.Valid(got) {
-				t.Fatalf("補修後も解釈できません: %s", got)
+				t.Fatalf("still cannot be parsed after repair: %s", got)
 			}
 		})
 	}
 }
 
-// 補修しても妥当にならないものは入力のまま返すこと。
-// 悪化させないのが要点で、呼び出し側のエラーが元の壊れ方を指したままになります。
+// Input that does not become valid after repair is returned unchanged.
+// Never making it worse is the point: the caller's error keeps pointing at the original breakage.
 func TestSanitizeJSONGivesUpCleanly(t *testing.T) {
 	t.Parallel()
 
@@ -70,13 +70,13 @@ func TestSanitizeJSONGivesUpCleanly(t *testing.T) {
 		``,
 	} {
 		if got := string(SanitizeJSON([]byte(in))); got != in {
-			t.Errorf("SanitizeJSON(%q) = %q, 直せないなら入力のまま返してください", in, got)
+			t.Errorf("SanitizeJSON(%q) = %q, return the input unchanged when it cannot be fixed", in, got)
 		}
 	}
 }
 
-// エスケープの補修が中身を変えないこと。
-// バックスラッシュは literal として残り、正しいエスケープは解釈されたままになります。
+// Repairing escapes does not change the contents.
+// The backslash stays as a literal, and valid escapes stay interpreted.
 func TestEscapeRepairPreservesContent(t *testing.T) {
 	t.Parallel()
 
@@ -85,20 +85,20 @@ func TestEscapeRepairPreservesContent(t *testing.T) {
 	}
 	in := `{"excerpt":"re := regexp.MustCompile(\d+)\nnext"}`
 	if err := json.Unmarshal(SanitizeJSON([]byte(in)), &v); err != nil {
-		t.Fatalf("補修後に解釈できません: %v", err)
+		t.Fatalf("cannot parse after repair: %v", err)
 	}
 	if !strings.Contains(v.Excerpt, `\d+`) {
-		t.Errorf("バックスラッシュが literal として残っていません: %q", v.Excerpt)
+		t.Errorf("the backslash did not stay as a literal: %q", v.Excerpt)
 	}
 	if !strings.Contains(v.Excerpt, "\n") {
-		t.Errorf("正しい \\n が literal に化けています: %q", v.Excerpt)
+		t.Errorf("a valid \\n turned into a literal: %q", v.Excerpt)
 	}
 }
 
-// 生の制御文字を補修しても、引用の中身は失われないこと。
+// Repairing raw control characters does not lose the contents of the quote.
 //
-// 引用は指摘の位置を示す唯一の手掛かり（行番号は省略されうる）なので、
-// 直った代わりに中身が変わるのでは意味がありません。
+// The quote is the only clue to where a finding is (the line number may be omitted), so a fix that
+// changes the contents defeats the purpose.
 func TestControlCharRepairPreservesContent(t *testing.T) {
 	t.Parallel()
 
@@ -107,30 +107,30 @@ func TestControlCharRepairPreservesContent(t *testing.T) {
 	}
 	in := "{\"excerpt\":\"一行目\n\tインデントされた二行目\"}"
 	if err := json.Unmarshal(SanitizeJSON([]byte(in)), &v); err != nil {
-		t.Fatalf("補修後に解釈できません: %v", err)
+		t.Fatalf("cannot parse after repair: %v", err)
 	}
 	if v.Excerpt != "一行目\n\tインデントされた二行目" {
-		t.Errorf("引用の中身が変わりました: %q", v.Excerpt)
+		t.Errorf("the contents of the quote changed: %q", v.Excerpt)
 	}
 }
 
-// 文字列の外の改行・インデントは触らないこと。
-// 整形済みの JSON まで書き換えると、補修が「直す」より「壊す」側へ回ります。
+// Newlines and indentation outside strings are left alone.
+// Rewriting formatted JSON too would make the repair break more than it fixes.
 func TestControlCharRepairKeepsFormatting(t *testing.T) {
 	t.Parallel()
 
-	// 値としては壊れている（末尾に余分な閉じ括弧）が、整形の改行は正当な入力。
+	// Broken as a value (an extra closing bracket at the end), but the formatting newlines are legitimate input.
 	in := "{\n  \"title\": \"a\",\n  \"summary\": \"s\"\n}}"
 	got := string(SanitizeJSON([]byte(in)))
 	if strings.Contains(got, `\n  "title"`) {
-		t.Errorf("整形の改行までエスケープされました: %q", got)
+		t.Errorf("the formatting newlines were escaped too: %q", got)
 	}
 	if !json.Valid([]byte(got)) {
-		t.Errorf("補修後も解釈できません: %q", got)
+		t.Errorf("still cannot be parsed after repair: %q", got)
 	}
 }
 
-// ParseReport が補修を経由して成立すること。
+// ParseReport succeeds by way of the repair.
 func TestParseReportRecoversFromModelNoise(t *testing.T) {
 	t.Parallel()
 
@@ -143,10 +143,10 @@ func TestParseReportRecoversFromModelNoise(t *testing.T) {
 		t.Fatalf("ParseReport() = %v, want nil", err)
 	}
 	if !info.Repaired {
-		t.Error("補修を通ったのに ParseInfo.Repaired が false です")
+		t.Error("went through repair but ParseInfo.Repaired is false")
 	}
 	if info.Truncated {
-		t.Error("切れていないのに ParseInfo.Truncated が true です")
+		t.Error("not cut off but ParseInfo.Truncated is true")
 	}
 	if report.Title != "レビュー" {
 		t.Errorf("Title = %q", report.Title)
@@ -159,27 +159,28 @@ func TestParseReportRecoversFromModelNoise(t *testing.T) {
 	}
 }
 
-// 直しようが無い入力では、元の壊れ方を指すエラーを返すこと。
+// For input that cannot be fixed, the error points at the original breakage.
 func TestParseReportKeepsOriginalError(t *testing.T) {
 	t.Parallel()
 
 	_, _, err := ParseReport([]byte(`{"title":`))
 	if err == nil {
-		t.Fatal("エラーを期待しました")
+		t.Fatal("want an error")
 	}
-	if !strings.Contains(err.Error(), "JSONとして解釈できません") {
+	if !strings.Contains(err.Error(), "cannot parse as JSON") {
 		t.Errorf("err = %v", err)
 	}
 }
 
-// 出力の上限に当たって途中で切れた応答から、完結していた指摘だけを拾えること。
+// From a response cut off by the output limit, only the completed findings are recovered.
 //
-// ★ 実測で、10.7 KiB の差分に対して 212 KB を書いた末に切れ、完成していた Blocker の
-// 指摘ごと失われた例があります。全損にせず、切れたことを添えて返します。
+// ★ In one measured case the output was cut off after writing 212 KB for a 10.7 KiB diff, losing a
+// completed Blocker finding along with it. Instead of losing everything, return what there is and
+// say it was cut off.
 func TestParseReportSalvagesTruncatedOutput(t *testing.T) {
 	t.Parallel()
 
-	// 2 件目の途中で切れています（文字列の内側で終わっています）。
+	// Cut off in the middle of the second finding (it ends inside a string).
 	raw := `{"title":"レビュー","summary":"要約","verdict":{"decision":"Blocker","reason":"r"},` +
 		`"findings":[{"severity":"Blocker","file":"a.go","excerpt":"x","message":"m1"},` +
 		`{"severity":"Minor","file":"b.go","excerpt":"y","mess`
@@ -189,21 +190,21 @@ func TestParseReportSalvagesTruncatedOutput(t *testing.T) {
 		t.Fatalf("ParseReport() = %v, want nil", err)
 	}
 	if !info.Truncated {
-		t.Error("切れているのに ParseInfo.Truncated が false です")
+		t.Error("cut off but ParseInfo.Truncated is false")
 	}
 	if report.Verdict.Decision != DecisionBlocker {
 		t.Errorf("Decision = %q, want %q", report.Verdict.Decision, DecisionBlocker)
 	}
 	if len(report.Findings) != 1 {
-		t.Fatalf("findings = %d, want 1（完結していた 1 件だけ）", len(report.Findings))
+		t.Fatalf("findings = %d, want 1 (only the one that was complete)", len(report.Findings))
 	}
 	if report.Findings[0].Message != "m1" {
 		t.Errorf("findings[0].Message = %q, want m1", report.Findings[0].Message)
 	}
 }
 
-// 完結している出力では救出を働かせないこと。拾える範囲まで戻す操作はデータを落とすので、
-// 出番が無いときに動くと、正常な結果から末尾が消えます。
+// Salvage does not kick in for complete output. Going back to the recoverable part drops data, so
+// if it ran when not needed, the tail of a normal result would disappear.
 func TestParseReportDoesNotSalvageCompleteOutput(t *testing.T) {
 	t.Parallel()
 
@@ -212,17 +213,17 @@ func TestParseReportDoesNotSalvageCompleteOutput(t *testing.T) {
 		t.Fatalf("ParseReport() = %v, want nil", err)
 	}
 	if info.Repaired || info.Truncated {
-		t.Errorf("そのまま読めた入力で ParseInfo = %+v", info)
+		t.Errorf("ParseInfo = %+v for input that read as-is", info)
 	}
 }
 
-// 頭から壊れていて拾える範囲が無いものは、救出せずエラーにすること。
+// Output broken from the start, with nothing recoverable, is an error rather than salvaged.
 func TestParseReportRejectsUnsalvageableOutput(t *testing.T) {
 	t.Parallel()
 
-	// verdict まで到達する前に切れています。
+	// Cut off before reaching verdict.
 	_, _, err := ParseReport([]byte(`{"title":"レビュー","summary":"よ`))
 	if err == nil {
-		t.Fatal("エラーを期待しました")
+		t.Fatal("want an error")
 	}
 }

@@ -8,20 +8,20 @@ import (
 	"strings"
 )
 
-// Severity は、個々の指摘の重大度です。全レビューモードで共通のラベルとして扱います。
+// Severity is the severity of an individual finding. It is a label shared by every review mode.
 type Severity string
 
-// 並びがそのまま重さの定義です（Severities / SortFindings が参照します）。
+// The order is itself the definition of weight (Severities / SortFindings rely on it).
 const (
 	SeverityBlocker Severity = "Blocker"
 	SeverityMajor   Severity = "Major"
 	SeverityMinor   Severity = "Minor"
 )
 
-// Decision は、レビュー全体の判定です。Severity に「問題なし」を表す DecisionNone を加えたものです。
+// Decision is the verdict on the whole review: Severity plus DecisionNone, meaning "no issues".
 type Decision string
 
-// 値は受け取り側の表示分岐と、そこから保存される記録に現れます。
+// The values appear in the receiving side's display branches and in the records stored from them.
 const (
 	DecisionBlocker Decision = Decision(SeverityBlocker)
 	DecisionMajor   Decision = Decision(SeverityMajor)
@@ -29,34 +29,35 @@ const (
 	DecisionNone    Decision = "None"
 )
 
-// 列挙値の出どころはこの 4 つだけです。
+// These four are the only source of the enum values.
 //
-// 利用側が組み立てる AI の出力スキーマの列挙値と、受信したレポートの検証は、どちらも
-// ここを参照します。別に写しを持つと、値を足したときに食い違い、モデルはスキーマ上
-// 正当な値を返すのにデコードで弾かれます（症状は全レビューの失敗です）。
-// AI SDK のスキーマは列挙値を []string で要求するため、文字列版もここで配ります。
+// Both the enum in the AI output schema the consumer builds and the validation of a received
+// report refer to them. Keeping a separate copy lets the two drift apart when a value is added:
+// the model returns a value the schema allows and decoding rejects it (the symptom is every review
+// failing). AI SDK schemas want enum values as []string, so the string forms are provided here
+// too.
 
-// Severities は、取りうる重大度を重い順に返します。
+// Severities returns the possible severities, heaviest first.
 func Severities() []Severity {
 	return []Severity{SeverityBlocker, SeverityMajor, SeverityMinor}
 }
 
-// Decisions は、取りうる判定を重い順に返します。
+// Decisions returns the possible decisions, heaviest first.
 func Decisions() []Decision {
 	return []Decision{DecisionBlocker, DecisionMajor, DecisionMinor, DecisionNone}
 }
 
-// SeverityStrings は、取りうる重大度を文字列で重い順に返します。
+// SeverityStrings returns the possible severities as strings, heaviest first.
 func SeverityStrings() []string {
 	return toStrings(Severities())
 }
 
-// DecisionStrings は、取りうる判定を文字列で重い順に返します。
+// DecisionStrings returns the possible decisions as strings, heaviest first.
 func DecisionStrings() []string {
 	return toStrings(Decisions())
 }
 
-// toStrings は、文字列を基底型とする列挙のスライスを []string へ写します。
+// toStrings maps a slice of a string-based enum onto []string.
 func toStrings[T ~string](values []T) []string {
 	out := make([]string, 0, len(values))
 	for _, v := range values {
@@ -65,19 +66,19 @@ func toStrings[T ~string](values []T) []string {
 	return out
 }
 
-// Valid は、既知の重大度かどうかを返します。
+// Valid reports whether s is a known severity.
 func (s Severity) Valid() bool { return slices.Contains(Severities(), s) }
 
-// Valid は、既知の判定かどうかを返します。
+// Valid reports whether d is a known decision.
 func (d Decision) Valid() bool { return slices.Contains(Decisions(), d) }
 
-// Verdict は、レビュー全体の判定とその理由です。
+// Verdict is the decision on the whole review and its reason.
 type Verdict struct {
 	Decision Decision `json:"decision"`
 	Reason   string   `json:"reason"`
 }
 
-// Finding は、個々の指摘です。
+// Finding is an individual finding.
 type Finding struct {
 	Severity   Severity `json:"severity"`
 	File       string   `json:"file"`
@@ -85,18 +86,18 @@ type Finding struct {
 	Excerpt    string   `json:"excerpt"`
 	Message    string   `json:"message"`
 	Suggestion string   `json:"suggestion,omitempty"`
-	// Evidence は、指摘の根拠としてレビュアーが参照した箇所です（任意）。
-	// 作業ディレクトリを調べる WorkspaceReviewer 実装が、差分の外のどのファイルを
-	// 確認して判断したかを残す用途を想定しています。検証はしません（レビュアーの
-	// 自己申告であり、欠けても成果物は成立するためです）。
+	// Evidence lists the places the reviewer consulted as grounds for the finding (optional).
+	// It is meant for a WorkspaceReviewer implementation that inspects the working directory to
+	// record which files outside the diff it checked before deciding. It is not validated (it is
+	// the reviewer's own claim, and the artifact stands without it).
 	Evidence []string `json:"evidence,omitempty"`
 }
 
-// Report は、AI が返すレビュー結果です。
+// Report is the review result returned by the AI.
 //
-// JSON 文字列のまま層をまたいで受け渡さないのは、公開側で map[string]any へ再パースする
-// ことになり、型も検証も失われるためです。AI アダプターが一度だけデコードし、以降は
-// この構造体で扱います。
+// It is not passed across layers as a JSON string because the publishing side would then reparse
+// it into map[string]any, losing both the types and the validation. The AI adapter decodes it once
+// and everything after that works with this struct.
 type Report struct {
 	Title    string    `json:"title"`
 	Summary  string    `json:"summary"`
@@ -104,34 +105,36 @@ type Report struct {
 	Findings []Finding `json:"findings"`
 }
 
-// ParseInfo は、モデルの出力をそのまま読めなかった場合に、何をしてまで読んだかを伝えます。
+// ParseInfo reports, when the model output could not be read as-is, what it took to read it.
 //
-// 見なければ、起きたことはどこにも残りません。特に Truncated を無視すると、
-// 途中で切れたレビューを完全なものとして公開することになります。
+// Unless you look at it, what happened is recorded nowhere. Ignoring Truncated in particular means
+// publishing a review that was cut off as if it were complete.
 type ParseInfo struct {
-	// Repaired は、SanitizeJSON の補修を通したことを示します。内容は失われていません。
+	// Repaired reports that the output went through SanitizeJSON's repair. Nothing was lost.
 	Repaired bool
-	// Truncated は、出力が途中で切れていたため、完結していた範囲だけを拾ったことを示します。
+	// Truncated reports that the output was cut off, so only the completed part was recovered.
 	//
-	// ★このレポートは不完全です。切れた先に指摘が何件あったかは分かりません。
-	// 完全なレビューとして扱うと、読む側は「指摘はこれで全部」と受け取ります。
-	// 成果物や通知にその旨を残してください。
+	// ★ This report is incomplete. How many findings lay beyond the cut is unknown. Treated as a
+	// complete review, readers take it as "these are all the findings". Say so in the artifact or
+	// the notification.
 	Truncated bool
 }
 
-// ParseReport は、AI が返した JSON を Report へデコードし、検証します。
+// ParseReport decodes the JSON returned by the AI into a Report and validates it.
 //
-// 段階は 3 つあり、後ろほど失うものが大きくなります。
+// There are three stages, and each later one loses more.
 //
-//  1. そのまま解釈する
-//  2. SanitizeJSON で補修して解釈する（内容は落ちません。ParseInfo.Repaired）
-//  3. 途中で切れたとみなし、完結している範囲だけを拾う（内容が落ちます。ParseInfo.Truncated）
+//  1. Interpret as-is
+//  2. Repair with SanitizeJSON and interpret (nothing is dropped; ParseInfo.Repaired)
+//  3. Assume the output was cut off and recover only the completed part (content is dropped;
+//     ParseInfo.Truncated)
 //
-// 2 と 3 が要るのは、構造化出力を指定してもモデルがフェンスや後書き、エスケープし忘れた
-// バックスラッシュを混ぜたり、出力の上限に当たって文の途中で止まったりするためです。
-// どれも応答を返しきったあとの話なので、API の再試行では直りません。
+// 2 and 3 are needed because, even with structured output specified, the model mixes in fences,
+// trailing remarks and backslashes it forgot to escape, or hits its output limit and stops
+// mid-sentence. All of these happen after the response has been fully returned, so retrying the
+// API call does not fix them.
 //
-// どの段階を通ったかは戻り値の ParseInfo でしか分かりません。
+// Which stage was taken is visible only through the returned ParseInfo.
 func ParseReport(data []byte) (Report, ParseInfo, error) {
 	if len(strings.TrimSpace(string(data))) == 0 {
 		return Report{}, ParseInfo{}, ErrEmptyResponse
@@ -147,7 +150,7 @@ func ParseReport(data []byte) (Report, ParseInfo, error) {
 	return report, info, nil
 }
 
-// decodeReport は、必要なら補修と切り出しを経て JSON を Report へ写します。
+// decodeReport maps the JSON onto a Report, going through repair and salvage when needed.
 func decodeReport(data []byte) (Report, ParseInfo, error) {
 	var report Report
 	err := json.Unmarshal(data, &report)
@@ -155,9 +158,10 @@ func decodeReport(data []byte) (Report, ParseInfo, error) {
 		return report, ParseInfo{}, nil
 	}
 
-	// 返すのは常に元の入力に対するエラーです。呼び出し側が見たいのはモデルが実際に
-	// 返したものの壊れ方で、補修や切り出しの途中経過ではありません。
-	invalid := fmt.Errorf("%w: JSONとして解釈できません: %w", ErrInvalidReport, err)
+	// The error returned is always the one for the original input. What the caller wants to see
+	// is how the model's actual output was broken, not the intermediate state of repair or
+	// salvage.
+	invalid := fmt.Errorf("%w: cannot parse as JSON: %w", ErrInvalidReport, err)
 
 	var info ParseInfo
 	if cleaned := SanitizeJSON(data); !bytes.Equal(cleaned, data) {
@@ -170,8 +174,9 @@ func decodeReport(data []byte) (Report, ParseInfo, error) {
 		}
 	}
 
-	// 補修しても読めないなら、切れている可能性を見ます。切り出しは補修後の内容に対して
-	// 行います（壊れたエスケープを含んだままでは、拾った範囲も読めません）。
+	// If it still cannot be read after repair, consider that it may have been cut off. Salvage
+	// works on the repaired content (with broken escapes still in it, the recovered part would not
+	// be readable either).
 	salvaged := salvageJSON(data)
 	if salvaged == nil {
 		return Report{}, ParseInfo{}, invalid
@@ -185,35 +190,36 @@ func decodeReport(data []byte) (Report, ParseInfo, error) {
 	return partial, info, nil
 }
 
-// Validate は、レポートが最低限の体裁を満たしているかを検証します。
+// Validate checks that the report meets the minimum shape.
 //
-// 検証するのは列挙値と、欠けると成果物が成立しない項目だけです。AI の出力はスキーマで
-// 制約済みであり、ここで細かく縛るとモデルの妥当な出力まで弾いてしまうためです。
+// It checks only the enum values and the fields without which the artifact does not stand. The AI
+// output is already constrained by the schema, and binding it more tightly here would reject
+// legitimate model output too.
 func (r Report) Validate() error {
 	if strings.TrimSpace(r.Title) == "" {
-		return fmt.Errorf("%w: title が空です", ErrInvalidReport)
+		return fmt.Errorf("%w: title is empty", ErrInvalidReport)
 	}
 	if !r.Verdict.Decision.Valid() {
-		return fmt.Errorf("%w: 未知の verdict.decision です: %q", ErrInvalidReport, r.Verdict.Decision)
+		return fmt.Errorf("%w: unknown verdict.decision %q", ErrInvalidReport, r.Verdict.Decision)
 	}
 	for i, finding := range r.Findings {
 		if !finding.Severity.Valid() {
-			return fmt.Errorf("%w: findings[%d] の severity が未知です: %q", ErrInvalidReport, i, finding.Severity)
+			return fmt.Errorf("%w: findings[%d] has unknown severity %q", ErrInvalidReport, i, finding.Severity)
 		}
 	}
 	return nil
 }
 
-// SortFindings は、指摘を重大度の重い順に並べ替えます。
+// SortFindings sorts the findings by severity, heaviest first.
 //
-// プロンプトでモデルに重い順を指示することはできますが、守られる保証はありません。
-// 並びは読む人の目に最初に入るものを決めるので、受け取った側で確定させます。
+// The prompt can tell the model to order them heaviest first, but nothing guarantees it is
+// followed. The order decides what a reader sees first, so the receiving side settles it.
 //
-// 同じ重大度の中では元の順序を保ちます。モデルはたいていファイル順・行順に並べており、
-// その中での読みやすさを崩す理由が無いためです。
+// Within the same severity the original order is kept. The model usually orders by file and line,
+// and there is no reason to break the readability within that.
 //
-// 重さの定義は Severities() の並びです。呼び出し側で順位表を持たないでください。
-// 重大度を足したときに、こちらだけ直して食い違います。
+// The definition of weight is the order of Severities(). Do not keep a ranking table on the
+// caller's side: when a severity is added, only one side gets updated and they drift apart.
 func (r *Report) SortFindings() {
 	order := Severities()
 	rank := make(map[Severity]int, len(order))
@@ -221,8 +227,8 @@ func (r *Report) SortFindings() {
 		rank[severity] = i
 	}
 
-	// 未知の重大度は末尾へ回します。Validate を通っていれば現れませんが、
-	// 検証前に呼ばれても並びが壊れないようにします。
+	// Unknown severities go to the end. They do not appear once Validate has passed, but this
+	// keeps the order intact even when called before validation.
 	unknown := len(order)
 	rankOf := func(s Severity) int {
 		if i, ok := rank[s]; ok {
@@ -236,7 +242,8 @@ func (r *Report) SortFindings() {
 	})
 }
 
-// Count は、指定した重大度の指摘件数を返します。通知の文面などに利用できます。
+// Count returns the number of findings of the given severity. It can be used in notification
+// text, for example.
 func (r Report) Count(severity Severity) int {
 	n := 0
 	for _, finding := range r.Findings {

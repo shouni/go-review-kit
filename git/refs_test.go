@@ -7,9 +7,9 @@ import (
 	"testing"
 )
 
-// 参照はつねに「リモートブランチ → コミット」の順で解決します。逆順にすると、
-// チケット番号をそのままブランチ名にした数字だけのブランチが短縮ハッシュとして
-// 解決され、意図しないコミットの差分を取ってしまいます。
+// Refs always resolve in the order "remote branch → commit". In the reverse order, a digits-only
+// branch named after a ticket number would resolve as an abbreviated hash, and the diff of an
+// unintended commit would be taken.
 func TestRefCandidates(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -17,7 +17,7 @@ func TestRefCandidates(t *testing.T) {
 		want  []refCandidate
 	}{
 		{
-			name:  "通常のブランチ名",
+			name:  "plain branch name",
 			input: "develop",
 			want: []refCandidate{
 				{ref: "origin/develop", isBranch: true},
@@ -25,7 +25,7 @@ func TestRefCandidates(t *testing.T) {
 			},
 		},
 		{
-			name:  "16進数に見える入力もブランチを優先する",
+			name:  "hex-looking input still prefers the branch",
 			input: "f9211119e3",
 			want: []refCandidate{
 				{ref: "origin/f9211119e3", isBranch: true},
@@ -33,7 +33,7 @@ func TestRefCandidates(t *testing.T) {
 			},
 		},
 		{
-			name:  "数字だけのブランチ名",
+			name:  "digits-only branch name",
 			input: "12345",
 			want: []refCandidate{
 				{ref: "origin/12345", isBranch: true},
@@ -41,12 +41,12 @@ func TestRefCandidates(t *testing.T) {
 			},
 		},
 		{
-			name:  "origin/ 付きはブランチとしてのみ解釈する",
+			name:  "origin/ prefix is a branch only",
 			input: "origin/main",
 			want:  []refCandidate{{ref: "origin/main", isBranch: true}},
 		},
 		{
-			name:  "前後の空白は無視する",
+			name:  "surrounding whitespace is ignored",
 			input: "  main  ",
 			want: []refCandidate{
 				{ref: "origin/main", isBranch: true},
@@ -54,7 +54,7 @@ func TestRefCandidates(t *testing.T) {
 			},
 		},
 		{
-			name:  "空文字は候補なし",
+			name:  "empty string has no candidates",
 			input: "   ",
 			want:  nil,
 		},
@@ -65,11 +65,11 @@ func TestRefCandidates(t *testing.T) {
 			got := refCandidates(tt.input)
 
 			if len(got) != len(tt.want) {
-				t.Fatalf("候補数 = %d, want %d (%+v)", len(got), len(tt.want), got)
+				t.Fatalf("candidate count = %d, want %d (%+v)", len(got), len(tt.want), got)
 			}
 			for i := range got {
 				if got[i] != tt.want[i] {
-					t.Errorf("候補[%d] = %+v, want %+v", i, got[i], tt.want[i])
+					t.Errorf("candidate[%d] = %+v, want %+v", i, got[i], tt.want[i])
 				}
 			}
 		})
@@ -93,18 +93,18 @@ func TestLocalBranchName(t *testing.T) {
 	}
 }
 
-// GIT_SSH_COMMAND はシェル経由で解釈されるため、パスに含まれるシングルクォートを
-// エスケープしないとコマンドを差し込まれます。
+// GIT_SSH_COMMAND is interpreted through a shell, so unless single quotes in the path are escaped,
+// a command can be injected.
 func TestQuotePathForShell(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  string
 	}{
-		{"通常のパス", "/home/user/.ssh/id_ed25519", `'/home/user/.ssh/id_ed25519'`},
-		{"空白入り", "/tmp/my key", `'/tmp/my key'`},
-		{"シングルクォート入り", "/tmp/it's", `'/tmp/it'\''s'`},
-		{"コマンド差し込みの試み", "/tmp/k'; rm -rf /; '", `'/tmp/k'\''; rm -rf /; '\'''`},
+		{"plain path", "/home/user/.ssh/id_ed25519", `'/home/user/.ssh/id_ed25519'`},
+		{"with a space", "/tmp/my key", `'/tmp/my key'`},
+		{"with a single quote", "/tmp/it's", `'/tmp/it'\''s'`},
+		{"command injection attempt", "/tmp/k'; rm -rf /; '", `'/tmp/k'\''; rm -rf /; '\'''`},
 	}
 
 	for _, tt := range tests {
@@ -119,7 +119,7 @@ func TestQuotePathForShell(t *testing.T) {
 func TestExpandTilde(t *testing.T) {
 	current, err := user.Current()
 	if err != nil {
-		t.Skipf("ユーザー情報を取得できません: %v", err)
+		t.Skipf("cannot get user information: %v", err)
 	}
 
 	tests := []struct {
@@ -127,18 +127,18 @@ func TestExpandTilde(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"チルダなしはそのまま", "/etc/ssh/key", "/etc/ssh/key"},
-		{"相対パスはそのまま", "keys/id_rsa", "keys/id_rsa"},
-		{"チルダのみは展開しない", "~foo/key", "~foo/key"},
-		{"チルダを展開する", "~/.ssh/id_ed25519", filepath.Join(current.HomeDir, ".ssh/id_ed25519")},
-		{"空文字はそのまま", "", ""},
+		{"no tilde is unchanged", "/etc/ssh/key", "/etc/ssh/key"},
+		{"relative path is unchanged", "keys/id_rsa", "keys/id_rsa"},
+		{"tilde-user is not expanded", "~foo/key", "~foo/key"},
+		{"expands tilde", "~/.ssh/id_ed25519", filepath.Join(current.HomeDir, ".ssh/id_ed25519")},
+		{"empty string is unchanged", "", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := expandTilde(tt.input)
 			if err != nil {
-				t.Fatalf("予期しないエラー: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tt.want {
 				t.Errorf("expandTilde(%q) = %q, want %q", tt.input, got, tt.want)
@@ -147,8 +147,8 @@ func TestExpandTilde(t *testing.T) {
 	}
 }
 
-// git は失敗時に URL 全体を stderr へ出すため、認証情報が混じっているとエラー
-// メッセージ経由でログと通知に流れます。伏せられることを確かめます。
+// On failure git prints the whole URL to stderr, so any credentials in it would flow into logs and
+// notifications through the error message. This checks that they are masked.
 func TestRedactURL(t *testing.T) {
 	t.Parallel()
 
@@ -158,28 +158,28 @@ func TestRedactURL(t *testing.T) {
 		want  string
 	}{
 		{
-			name:  "トークン付き https",
+			name:  "https with token",
 			input: "fatal: repository 'https://user:ghp_secret@github.com/o/r/' not found",
 			want:  "fatal: repository 'https://***@github.com/o/r/' not found",
 		},
 		{
-			name:  "ユーザ名のみ",
+			name:  "user name only",
 			input: "https://someone@example.com/o/r",
 			want:  "https://***@example.com/o/r",
 		},
 		{
-			name:  "認証情報なしは変えない",
+			name:  "no credentials is unchanged",
 			input: "https://github.com/o/r",
 			want:  "https://github.com/o/r",
 		},
 		{
-			// scp 形式は認証情報を含まないので、そのままにします。
-			name:  "scp 形式は変えない",
+			// The scp form carries no credentials, so it is left as is.
+			name:  "scp form is unchanged",
 			input: "git@github.com:o/r.git",
 			want:  "git@github.com:o/r.git",
 		},
 		{
-			name:  "空文字",
+			name:  "empty string",
 			input: "",
 			want:  "",
 		},
@@ -195,19 +195,19 @@ func TestRedactURL(t *testing.T) {
 	}
 }
 
-// clean は無視ファイルとネストした git リポジトリまで落とすこと。
-// これらが残ると、前回の残骸が head の内容としてレビュアーに読まれます。
+// clean removes ignored files and nested git repositories too.
+// If they survived, the reviewer would read the previous run's leftovers as the contents of head.
 func TestCleanArgsRemoveIgnoredAndNested(t *testing.T) {
 	t.Parallel()
 
 	joined := strings.Join(cleanArgs, " ")
 	for _, want := range []string{"clean", "-d", "-x"} {
 		if !strings.Contains(joined, want) {
-			t.Errorf("clean の引数に %q がありません: %v", want, cleanArgs)
+			t.Errorf("clean arguments lack %q: %v", want, cleanArgs)
 		}
 	}
-	// ネストした git リポジトリを消すには -f が 2 つ必要です。
+	// Removing nested git repositories takes two -f flags.
 	if n := strings.Count(joined, "-f"); n < 2 {
-		t.Errorf("-f が %d 個です。ネストした git リポジトリを消すには 2 つ要ります: %v", n, cleanArgs)
+		t.Errorf("there are %d -f flags; removing nested git repositories takes 2: %v", n, cleanArgs)
 	}
 }

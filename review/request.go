@@ -1,8 +1,9 @@
-// Package review は、AIレビューのドメイン型とポート（インターフェース）を定義します。
+// Package review defines the domain types and ports (interfaces) of an AI review.
 //
-// このパッケージは本モジュール内の他のどのパッケージにも依存しません。アダプター（git）と
-// オーケストレーター（pipeline）は、すべてこのパッケージの型とインターフェースだけを
-// 介して結び付きます。レビュアー・プロンプト・公開先・通知先の実装は利用側が持ちます。
+// This package depends on no other package in this module. The adapters (git) and the
+// orchestrator (pipeline) are connected only through this package's types and interfaces. The
+// implementations of the reviewer, the prompts, the publishing target and the notification target
+// belong to the consumer.
 package review
 
 import (
@@ -10,40 +11,40 @@ import (
 	"strings"
 )
 
-// Request は、1 回のレビュー実行に必要な入力です。
+// Request is the input needed for one review run.
 //
-// Base / Head はブランチ名に限らずコミットハッシュやタグも受け付けるため、フィールド名は
-// ブランチに限定しない Base / Head としています。JSON タグが base_branch / feature_branch
-// のままなのは、Cloud Tasks 等のペイロードとして流通している既存の形式を壊さないためです。
+// Base / Head accept commit hashes and tags as well as branch names, so the field names are Base /
+// Head, not tied to branches. The JSON tags stay base_branch / feature_branch so as not to break
+// the existing format already in circulation as Cloud Tasks payloads and the like.
 //
-// Request は常に値として受け渡され、パイプラインの途中で書き換えられることはありません。
+// A Request is always passed by value and is never rewritten partway through the pipeline.
 type Request struct {
-	// JobID は、呼び出し側が持つ相関IDです（任意）。
+	// JobID is a correlation ID held by the caller (optional).
 	//
-	// 本ライブラリはこの値を生成も解釈もせず、Publisher / Notifier へそのまま渡し、
-	// ログ属性に載せるだけです。ジョブ基盤を持つ呼び出し側が、成果物の保存先や進行状況の
-	// 記録先を自分で決められるようにするための素通し用のフィールドで、この値の書式や
-	// 一意性は呼び出し側の責務です。
+	// This library neither generates nor interprets the value; it passes it through to the
+	// Publisher / Notifier and puts it on log attributes, nothing more. It is a pass-through field
+	// that lets a caller with a job system decide where artifacts are stored and where progress is
+	// recorded, and the value's format and uniqueness are the caller's responsibility.
 	JobID      string `json:"job_id,omitempty"`
-	RepoURL    string `json:"repo_url"`       // GitリポジトリのURL (例: ssh://git@github.com/user/repo)
-	Base       string `json:"base_branch"`    // 比較元の参照 (ブランチ・タグ・コミットハッシュ)
-	Head       string `json:"feature_branch"` // 比較対象の参照 (ブランチ・タグ・コミットハッシュ)
-	Mode       string `json:"mode"`           // レビューモード。解釈は PromptGenerator の実装に委ねます
-	Model      string `json:"model_name"`     // 使用する AI モデル名
-	StorageURI string `json:"storage_uri"`    // 保存先 (例: gs://bucket/path, s3://bucket/path)
-	PublicURL  string `json:"public_url"`     // 閲覧用URL (https://...)
+	RepoURL    string `json:"repo_url"`       // Git repository URL (e.g. ssh://git@github.com/user/repo)
+	Base       string `json:"base_branch"`    // Ref compared from (branch, tag or commit hash)
+	Head       string `json:"feature_branch"` // Ref compared to (branch, tag or commit hash)
+	Mode       string `json:"mode"`           // Review mode; its meaning is left to the PromptGenerator implementation
+	Model      string `json:"model_name"`     // Name of the AI model to use
+	StorageURI string `json:"storage_uri"`    // Storage location (e.g. gs://bucket/path, s3://bucket/path)
+	PublicURL  string `json:"public_url"`     // URL for viewing (https://...)
 }
 
-// Validate は必須項目が埋まっているかを検証し、不足があれば ErrInvalidRequest を包んだ
-// エラーを返します。
+// Validate checks that the required fields are filled and, if any are missing, returns an error
+// wrapping ErrInvalidRequest.
 //
-// パイプラインが Run の冒頭で呼ぶため、呼び出し側が事前に呼ぶ必要はありません。
-// メソッドとして公開しているのは、JSON からデコードして組み立てた Request にも
-// 同じ検証を後から適用できるようにするためです。
+// The pipeline calls it at the start of Run, so callers do not need to call it beforehand. It is
+// exported as a method so that the same check can be applied later to a Request assembled by
+// decoding JSON.
 //
-// Mode と PublicURL は任意です。Mode の解釈は PromptGenerator の実装次第であり、空を
-// 既定モードとして扱う実装もあり得るためです。PublicURL は結果の閲覧導線でしかなく、
-// 無くてもレビュー自体は完結します。
+// Mode and PublicURL are optional. How Mode is interpreted depends on the PromptGenerator
+// implementation, and one may treat an empty value as the default mode. PublicURL is only the way
+// to view the result; the review is complete without it.
 func (r Request) Validate() error {
 	var missing []string
 	for _, field := range []struct {
@@ -62,7 +63,7 @@ func (r Request) Validate() error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("%w: %s が未設定です", ErrInvalidRequest, strings.Join(missing, ", "))
+		return fmt.Errorf("%w: missing %s", ErrInvalidRequest, strings.Join(missing, ", "))
 	}
 	return nil
 }

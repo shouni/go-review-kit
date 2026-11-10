@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-// FuzzSanitizeJSON は、補修が入力を悪化させないことを確かめます。
+// FuzzSanitizeJSON checks that the repair never makes the input worse.
 //
-// 不変条件は 2 つです。入力を 1 バイトでも変えたなら、その結果は妥当な JSON でなければ
-// なりません（直せないなら手を出さない）。そして既に妥当な入力は 1 バイトも変わりません。
-// 補修はバックスラッシュと制御文字を手書きで走査し、括弧の対応を数えるコードで、
-// 表のテストは思いついた壊れ方しか試せません。悪化させた場合、呼び出し側のエラーは
-// モデルが実際に返したものではなく補修の途中経過を指すことになります。
+// There are two invariants. If the input was changed by even one byte, the result must be valid
+// JSON (if it cannot be fixed, leave it alone). And already-valid input does not change by a single
+// byte. The repair is hand-written code that scans backslashes and control characters and counts
+// bracket matching, and a table test only tries the breakages someone thought of. If it made
+// things worse, the caller's error would point at an intermediate state of the repair instead of
+// at what the model actually returned.
 func FuzzSanitizeJSON(f *testing.F) {
 	for _, s := range fuzzJSONSeeds() {
 		f.Add([]byte(s))
@@ -27,7 +28,7 @@ func FuzzSanitizeJSON(f *testing.F) {
 			return
 		}
 		if string(got) == string(data) {
-			return // 直せなかったのでそのまま返した。許される。
+			return // It could not be fixed, so it was returned unchanged. That is allowed.
 		}
 		if !json.Valid(got) {
 			t.Fatalf("input was altered but is still invalid:\n in: %q\nout: %q", data, got)
@@ -35,10 +36,10 @@ func FuzzSanitizeJSON(f *testing.F) {
 	})
 }
 
-// FuzzParseReport は、ParseReport が成功したレポートが必ず Validate を通ること、
-// 切り詰めの報告が実際に切り詰めたときだけ立つことを確かめます。
+// FuzzParseReport checks that a report ParseReport succeeded on always passes Validate, and that
+// truncation is reported only when the output was actually truncated.
 //
-// Truncated を取りこぼすと、途中で切れたレビューが完全なものとして公開されます。
+// Missing a Truncated publishes a review that was cut off as a complete one.
 func FuzzParseReport(f *testing.F) {
 	for _, s := range fuzzJSONSeeds() {
 		f.Add([]byte(s))
@@ -50,11 +51,11 @@ func FuzzParseReport(f *testing.F) {
 			return
 		}
 
-		// 成功したなら、その内容は必ず検証を通る。
+		// If it succeeded, the contents always pass validation.
 		if err := report.Validate(); err != nil {
 			t.Fatalf("ParseReport(%q) succeeded but Validate rejects it: %v", data, err)
 		}
-		// 元の入力がそのまま解釈できたなら、補修も切り詰めも起きていない。
+		// If the original input was interpretable as-is, neither repair nor truncation happened.
 		if json.Valid(data) && (info.Repaired || info.Truncated) {
 			t.Fatalf("ParseReport(%q) reported Repaired=%v Truncated=%v for already-valid input",
 				data, info.Repaired, info.Truncated)
@@ -62,7 +63,7 @@ func FuzzParseReport(f *testing.F) {
 	})
 }
 
-// fuzzJSONSeeds は、実際に見たモデル出力の壊れ方を並べたものです。
+// fuzzJSONSeeds lists the ways model output has actually been seen to break.
 func fuzzJSONSeeds() []string {
 	const valid = `{"title":"t","summary":"s","verdict":{"decision":"approve","reason":"r"}}`
 	return []string{

@@ -26,44 +26,44 @@ func TestRequestValidate(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name:   "全項目が揃っている",
+			name:   "all fields present",
 			mutate: func(*Request) {},
 		},
 		{
-			name:   "mode は任意",
+			name:   "mode is optional",
 			mutate: func(r *Request) { r.Mode = "" },
 		},
 		{
-			name:   "public_url は任意",
+			name:   "public_url is optional",
 			mutate: func(r *Request) { r.PublicURL = "" },
 		},
 		{
-			name:    "repo_url が無い",
+			name:    "missing repo_url",
 			mutate:  func(r *Request) { r.RepoURL = "" },
 			wantErr: true,
 		},
 		{
-			name:    "base_branch が無い",
+			name:    "missing base_branch",
 			mutate:  func(r *Request) { r.Base = "" },
 			wantErr: true,
 		},
 		{
-			name:    "feature_branch が無い",
+			name:    "missing feature_branch",
 			mutate:  func(r *Request) { r.Head = "" },
 			wantErr: true,
 		},
 		{
-			name:    "model_name が無い",
+			name:    "missing model_name",
 			mutate:  func(r *Request) { r.Model = "" },
 			wantErr: true,
 		},
 		{
-			name:    "storage_uri が無い",
+			name:    "missing storage_uri",
 			mutate:  func(r *Request) { r.StorageURI = "" },
 			wantErr: true,
 		},
 		{
-			name:    "空白のみは未設定として扱う",
+			name:    "whitespace only counts as unset",
 			mutate:  func(r *Request) { r.Base = "   " },
 			wantErr: true,
 		},
@@ -77,23 +77,23 @@ func TestRequestValidate(t *testing.T) {
 			err := req.Validate()
 			if tt.wantErr {
 				if err == nil {
-					t.Fatal("エラーを期待しましたが nil でした")
+					t.Fatal("want an error, got nil")
 				}
 				if !errors.Is(err, ErrInvalidRequest) {
-					t.Fatalf("ErrInvalidRequest を包んでいません: %v", err)
+					t.Fatalf("does not wrap ErrInvalidRequest: %v", err)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("予期しないエラー: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}
 }
 
-// 旧実装のペイロード形式（base_branch / feature_branch / model_name）をそのまま
-// デコードできることを保証します。フィールド名を Base / Head へ改名したため、
-// タグが崩れると流通中のペイロードが静かに空で通ってしまいます。
+// Guarantees that the payload format of the old implementation (base_branch / feature_branch /
+// model_name) still decodes as-is. The fields were renamed to Base / Head, so if the tags broke,
+// payloads in circulation would silently pass through empty.
 func TestRequestJSONTagsAreCompatible(t *testing.T) {
 	const payload = `{
 		"repo_url": "ssh://git@github.com/shouni/example.git",
@@ -107,38 +107,38 @@ func TestRequestJSONTagsAreCompatible(t *testing.T) {
 
 	var got Request
 	if err := json.Unmarshal([]byte(payload), &got); err != nil {
-		t.Fatalf("デコードに失敗: %v", err)
+		t.Fatalf("decode failed: %v", err)
 	}
 	if got != validRequest() {
-		t.Fatalf("デコード結果が一致しません: %+v", got)
+		t.Fatalf("decoded result does not match: %+v", got)
 	}
 }
 
-// JobID は呼び出し側の相関IDで、本ライブラリは生成も解釈もしません。
-// 必須にすると、ジョブ基盤を持たない呼び出し側が使えなくなります。
+// JobID is the caller's correlation ID; this library neither generates nor interprets it.
+// Making it required would lock out callers without a job system.
 func TestRequestJobIDIsOptional(t *testing.T) {
 	req := validRequest()
 	req.JobID = ""
 
 	if err := req.Validate(); err != nil {
-		t.Fatalf("JobID なしで検証に失敗しました: %v", err)
+		t.Fatalf("validation failed without a JobID: %v", err)
 	}
 
 	req.JobID = "20260810-213000-a1b2c3d4"
 	if err := req.Validate(); err != nil {
-		t.Fatalf("JobID ありで検証に失敗しました: %v", err)
+		t.Fatalf("validation failed with a JobID: %v", err)
 	}
 }
 
-// JobID を持たない既存ペイロードは job_id なしでエンコードされます。
-// 常に出力すると、この形を読む側に空文字の分岐を強いることになります。
+// An existing payload without a JobID is encoded without job_id.
+// Always emitting it would force readers of this format to branch on an empty string.
 func TestRequestJobIDJSON(t *testing.T) {
 	data, err := json.Marshal(validRequest())
 	if err != nil {
-		t.Fatalf("エンコードに失敗: %v", err)
+		t.Fatalf("encode failed: %v", err)
 	}
 	if strings.Contains(string(data), "job_id") {
-		t.Errorf("JobID が空なのに出力されています: %s", data)
+		t.Errorf("JobID is empty but was emitted: %s", data)
 	}
 
 	req := validRequest()
@@ -146,12 +146,12 @@ func TestRequestJobIDJSON(t *testing.T) {
 
 	data, err = json.Marshal(req)
 	if err != nil {
-		t.Fatalf("エンコードに失敗: %v", err)
+		t.Fatalf("encode failed: %v", err)
 	}
 
 	var restored Request
 	if err := json.Unmarshal(data, &restored); err != nil {
-		t.Fatalf("デコードに失敗: %v", err)
+		t.Fatalf("decode failed: %v", err)
 	}
 	if restored.JobID != req.JobID {
 		t.Errorf("JobID = %q, want %q", restored.JobID, req.JobID)

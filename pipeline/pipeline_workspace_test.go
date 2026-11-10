@@ -7,20 +7,20 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// レビュアーが受け取る作業ディレクトリは、Head をチェックアウトした状態であること。
+// The working directory the reviewer receives has Head checked out.
 //
-// Diff は作業ツリーに触れずオブジェクト比較だけで差分を作るため、チェックアウトを省くと
-// レビュアーは前回の実行が残した別参照の内容を読みます。
+// Diff builds the diff purely by comparing objects without touching the working tree, so skipping
+// the checkout would have the reviewer read the contents of another ref left by a previous run.
 func TestRunChecksOutHeadBeforeReview(t *testing.T) {
 	h := newHarness(t)
 	req := testRequest()
 
 	if _, _, err := h.pipeline.Run(context.Background(), req); err != nil {
-		t.Fatalf("Run が失敗しました: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 
 	if h.source.gotHead != req.Head {
-		t.Errorf("CheckoutHead に渡された head = %q, want %q", h.source.gotHead, req.Head)
+		t.Errorf("head passed to CheckoutHead = %q, want %q", h.source.gotHead, req.Head)
 	}
 	want := review.Workspace{Dir: h.source.dir, Base: req.Base, Head: req.Head}
 	if h.reviewer.gotWS != want {

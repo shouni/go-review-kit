@@ -17,9 +17,9 @@ func TestResultConstructors(t *testing.T) {
 		wantStatus    Status
 		wantPublished bool
 	}{
-		{"成功", Succeeded(req, duration), StatusSucceeded, true},
-		{"スキップ", Skipped(req, duration), StatusSkipped, false},
-		{"失敗", Failed(req, duration, errors.New("boom")), StatusFailed, false},
+		{"success", Succeeded(req, duration), StatusSucceeded, true},
+		{"skip", Skipped(req, duration), StatusSkipped, false},
+		{"failure", Failed(req, duration, errors.New("boom")), StatusFailed, false},
 	}
 
 	for _, tt := range tests {
@@ -31,26 +31,26 @@ func TestResultConstructors(t *testing.T) {
 				t.Errorf("Published() = %v, want %v", tt.result.Published(), tt.wantPublished)
 			}
 			if tt.result.StorageURI != req.StorageURI || tt.result.PublicURL != req.PublicURL {
-				t.Errorf("リクエストの保存先が引き継がれていません: %+v", tt.result)
+				t.Errorf("the request's storage location was not carried over: %+v", tt.result)
 			}
 			if tt.result.Duration != duration {
 				t.Errorf("Duration = %v, want %v", tt.result.Duration, duration)
 			}
 			if tt.result.Message == "" {
-				t.Error("Message が空です")
+				t.Error("Message is empty")
 			}
 		})
 	}
 }
 
 func TestFailedResultIncludesCause(t *testing.T) {
-	cause := errors.New("APIが応答しません")
+	cause := errors.New("API is not responding")
 
 	result := Failed(validRequest(), time.Second, WrapStep(StepReview, cause))
 	if want := cause.Error(); !strings.Contains(result.Message, want) {
-		t.Fatalf("Message に原因が含まれていません: %q", result.Message)
+		t.Fatalf("Message does not include the cause: %q", result.Message)
 	}
 	if !strings.Contains(result.Message, StepReview) {
-		t.Fatalf("Message に工程名が含まれていません: %q", result.Message)
+		t.Fatalf("Message does not include the step name: %q", result.Message)
 	}
 }

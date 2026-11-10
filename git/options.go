@@ -1,11 +1,12 @@
-// Package git は、review.DiffSource の Git 実装を 2 種類提供します。
+// Package git provides two Git implementations of review.DiffSource.
 //
-//   - GoGit: go-git による純 Go 実装。git バイナリを必要とせず、実行のたびに作業ディレクトリを
-//     破棄するため、サーバーレスのような使い捨て環境に向きます。
-//   - CLI: ローカルの git コマンドを呼ぶ実装。チェックアウトを再利用して差分取得が速いため、
-//     永続的な作業ディレクトリを持てるローカル開発や CI に向きます。
+//   - GoGit: a pure Go implementation on go-git. It needs no git binary and discards the working
+//     directory on every run, which suits throwaway environments such as serverless.
+//   - CLI: an implementation that calls the local git command. It reuses the checkout, so taking a
+//     diff is fast, which suits local development and CI where a persistent working directory is
+//     possible.
 //
-// どちらを使うかは呼び出し側が選びます（本パッケージは選択しません）。
+// The caller chooses which to use (this package does not choose).
 package git
 
 import (
@@ -16,10 +17,11 @@ import (
 	"strings"
 )
 
-// DefaultContextLines は、CLI 実装が git diff に渡す既定の前後行数です。
+// DefaultContextLines is the default number of context lines the CLI implementation passes to git
+// diff.
 const DefaultContextLines = 10
 
-// settings は、両アダプター共通の設定です。
+// settings holds the settings shared by both adapters.
 type settings struct {
 	sshKeyPath   string
 	base         string
@@ -35,8 +37,8 @@ func newSettings(opts ...Option) (settings, error) {
 		dirNamer:     RepoDirName,
 	}
 	for _, opt := range opts {
-		// 条件付きでオプションを組み立てる呼び出し側は nil を混ぜがちです。
-		// パニックさせるほどの誤りではないので読み飛ばします。
+		// Callers that build options conditionally tend to mix in nil.
+		// It is not a mistake worth panicking over, so skip it.
 		if opt == nil {
 			continue
 		}
@@ -47,15 +49,15 @@ func newSettings(opts ...Option) (settings, error) {
 	return s, nil
 }
 
-// Option はアダプターおよび Factory の任意設定です。
+// Option is an optional setting of an adapter or a Factory.
 //
-// 生成時にだけ適用し、以降アダプターの設定は変わりません。セッターで後から書き換え
-// られると、実行中に設定が変わりうる状態になります。検証が必要な値を扱えるよう
-// error を返す形にしています。
+// Options apply only at creation, and an adapter's settings never change afterwards. If a setter
+// could rewrite them later, the settings could change mid-run. Options return an error so that
+// values needing validation can be handled.
 type Option func(*settings) error
 
-// WithSSHKey は、SSH 認証に使う秘密鍵のパスを設定します。
-// 未設定の場合、SSH 形式のリポジトリURLに対する認証は行われません。
+// WithSSHKey sets the path of the private key used for SSH authentication.
+// When unset, no authentication is done for SSH repository URLs.
 func WithSSHKey(path string) Option {
 	return func(s *settings) error {
 		s.sshKeyPath = path
@@ -63,8 +65,8 @@ func WithSSHKey(path string) Option {
 	}
 }
 
-// WithBase は、後始末の際に戻る基準参照を設定します（CLI 実装が使用します）。
-// Factory 経由で利用する場合は Request.Base が自動的に設定されます。
+// WithBase sets the base ref to return to on cleanup (used by the CLI implementation).
+// When used through a Factory, Request.Base is set automatically.
 func WithBase(ref string) Option {
 	return func(s *settings) error {
 		s.base = ref
@@ -72,7 +74,7 @@ func WithBase(ref string) Option {
 	}
 }
 
-// WithLogger は、アダプターが使うロガーを差し替えます。
+// WithLogger replaces the logger the adapter uses.
 func WithLogger(logger *slog.Logger) Option {
 	return func(s *settings) error {
 		if logger != nil {
@@ -82,43 +84,45 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithContextLines は、差分に含める前後の行数を設定します（CLI 実装のみ有効）。
-// 負の値はエラーになります。
+// WithContextLines sets the number of context lines included in the diff (CLI implementation
+// only). A negative value is an error.
 func WithContextLines(n int) Option {
 	return func(s *settings) error {
 		if n < 0 {
-			return fmt.Errorf("git: 前後行数に負の値は指定できません: %d", n)
+			return fmt.Errorf("git: context lines must not be negative: %d", n)
 		}
 		s.contextLines = n
 		return nil
 	}
 }
 
-// WithDirNamer は、リポジトリURLから作業ディレクトリ名を決める関数を差し替えます
-// （Factory のみ有効）。
+// WithDirNamer replaces the function that decides the working directory name from the repository
+// URL (Factory only).
 func WithDirNamer(fn func(repoURL string) string) Option {
 	return func(s *settings) error {
 		if fn == nil {
-			return fmt.Errorf("git: dirNamer に nil は指定できません")
+			return fmt.Errorf("git: dirNamer must not be nil")
 		}
 		s.dirNamer = fn
 		return nil
 	}
 }
 
-// RepoDirName は、リポジトリURLから作業ディレクトリ名を組み立てる既定の実装です。
+// RepoDirName is the default implementation that builds a working directory name from a
+// repository URL.
 //
-// スキーム・認証情報・末尾の .git を落とし、パス区切りなど扱いにくい文字をハイフンへ
-// 畳み込みます。同じURLからは常に同じ名前が得られるため、CLI 実装がチェックアウトを
-// 再利用できます。
+// It drops the scheme, the credentials and a trailing .git, and folds awkward characters such as
+// path separators into hyphens. The same URL always yields the same name, so the CLI
+// implementation can reuse its checkout.
 func RepoDirName(repoURL string) string {
 	name := strings.TrimSpace(repoURL)
 	if idx := strings.Index(name, "://"); idx >= 0 {
 		name = name[idx+len("://"):]
 	}
-	// 認証情報はホストの前にしか現れないので、最初の "/" より手前の "@" だけを見ます。
-	// LastIndex や Index で丸ごと探すと、パス側の "@"（例: owner/repo@v2）を認証情報と
-	// 誤認して、ホスト名ごと捨てた "v2" のような名前になり、別リポジトリと衝突します。
+	// Credentials appear only before the host, so only an "@" before the first "/" is considered.
+	// Searching the whole string with LastIndex or Index would mistake an "@" in the path (e.g.
+	// owner/repo@v2) for credentials, yielding a name like "v2" with the host thrown away, which
+	// collides with other repositories.
 	if slash := strings.Index(name, "/"); slash != 0 {
 		host := name
 		if slash > 0 {
@@ -145,15 +149,15 @@ func RepoDirName(repoURL string) string {
 		cleaned = "repo"
 	}
 
-	// 畳み込みだけでは別のリポジトリが同じ名前になります
-	// （group/sub/proj と group-sub-proj はどちらも group-sub-proj）。
-	// 同じディレクトリを別リポジトリが奪い合うと、片方のブランチの内容が
-	// もう片方のレビュー結果として公開されます。畳み込む前の形から短いハッシュを
-	// 足して区別します。
+	// Folding alone gives different repositories the same name
+	// (group/sub/proj and group-sub-proj both become group-sub-proj).
+	// When different repositories fight over one directory, one repository's branch is published
+	// as the other's review result. A short hash of the pre-folding form is appended to tell them
+	// apart.
 	//
-	// ハッシュを取る前に scp 形式の ":" を "/" へ寄せます。同じリポジトリを
-	// git@host:owner/repo と https://host/owner/repo のどちらで指定しても
-	// 同じ作業ディレクトリへ落ち着く性質を保つためです。
+	// Before hashing, the scp form's ":" is turned into "/". This keeps the property that the
+	// same repository lands in the same working directory whether it is given as
+	// git@host:owner/repo or https://host/owner/repo.
 	sum := sha256.Sum256([]byte(strings.ReplaceAll(name, ":", "/")))
 	return cleaned + "-" + hex.EncodeToString(sum[:])[:8]
 }

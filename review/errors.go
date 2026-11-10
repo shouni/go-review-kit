@@ -5,75 +5,81 @@ import (
 	"fmt"
 )
 
-// パイプラインが返す番兵エラーです。呼び出し側は errors.Is で分岐できます。
+// Sentinel errors returned by the pipeline. Callers can branch on them with errors.Is.
 //
-// 状態を構造体のフィールド（Error / IsSkipped のような形）で運ばないのは、状態が増える
-// たびにフィールドが増えるうえ errors.Is が効かないためです。通常の error として返し、
-// 種類は番兵エラーで表します。
+// State is not carried in struct fields (in the shape of Error / IsSkipped) because every new
+// state would add a field, and errors.Is would not work on them. Outcomes are returned as
+// ordinary errors, and their kind is expressed by a sentinel.
 var (
-	// ErrInvalidRequest は、Request の必須項目が欠けていることを示します。
+	// ErrInvalidRequest reports that a required field of the Request is missing.
 	ErrInvalidRequest = errors.New("review: request is invalid")
-	// ErrEmptyDiff は、base と head の間に差分が無くレビューをスキップしたことを示します。
-	// これは失敗ではないため、パイプラインは StatusSkipped の Result と共に nil を返します。
+	// ErrEmptyDiff reports that there is no diff between base and head, so the review was
+	// skipped. It is not a failure, so the pipeline returns nil together with a StatusSkipped
+	// Result.
 	ErrEmptyDiff = errors.New("review: diff is empty")
-	// ErrDiffTooLarge は、差分が上限（pipeline.WithMaxDiffBytes）を超えたため、
-	// AI へ送らずに中断したことを示します。
+	// ErrDiffTooLarge reports that the diff exceeded the limit (pipeline.WithMaxDiffBytes), so
+	// the run stopped without sending it to the AI.
 	//
-	// 差分なしと違い、これは失敗です。範囲を絞れば通る入力なので利用者に手を
-	// 打ってもらう必要があり、スキップとして扱うと「レビューはしたが指摘が無かった」
-	// と見分けが付きません。
+	// Unlike an empty diff, this is a failure. The input would pass with a narrower range, so the
+	// user has to act on it, and treating it as a skip would make it indistinguishable from
+	// "reviewed, but nothing was found".
 	//
-	// 送る前に落とすための番兵です。大きすぎる差分はレビューを実行しても、出力の
-	// 途中切れ・締切超過・入力上限のいずれかで結局失敗しますが、そのどれもが
-	// モデルを呼び終えたあとにしか分かりません。いちばんコストを払ったあとで
-	// 落ちる順序になります。
+	// This sentinel exists to stop before sending. Running a review over an oversized diff fails
+	// anyway, by truncated output, an exceeded deadline or an input limit, but each of those is
+	// only known after the model call has finished. That ordering fails after the most cost has
+	// been paid.
 	ErrDiffTooLarge = errors.New("review: diff is too large")
-	// ErrRefNotFound は、指定された参照がリポジトリに存在しないことを示します。
+	// ErrRefNotFound reports that the given ref does not exist in the repository.
 	//
-	// 「読もうとして失敗した」場合はこれではありません。リポジトリの破損やディスク障害まで
-	// 畳み込むと、利用者へ「そのブランチはありません」と伝えてしまうためです。
+	// It is not used when reading the ref failed. Folding repository corruption or disk failures
+	// into it would tell the user "that branch does not exist".
 	ErrRefNotFound = errors.New("review: ref not found")
-	// ErrUnsupportedRepoURL は、リポジトリURLの形式を扱えないことを示します。
+	// ErrUnsupportedRepoURL reports that the repository URL is in a form this module cannot
+	// handle.
 	//
-	// 入力の誤りであって障害ではないので、再試行しても直りません。利用者へ形式を
-	// 直してもらう案内が要る一方、ネットワーク起因の失敗は再試行で直るため、
-	// 呼び出し側が両者を分けられるように番兵にしています。
+	// It is an input mistake, not an outage, so retrying does not fix it. The user needs to be
+	// told to fix the form, while a network failure is fixed by retrying, so it is a sentinel to
+	// let callers tell the two apart.
 	ErrUnsupportedRepoURL = errors.New("review: unsupported repository URL")
-	// ErrEmptyResponse は、AI がエラーを返さずに空の結果を返したことを示します。
+	// ErrEmptyResponse reports that the AI returned an empty result without an error.
 	ErrEmptyResponse = errors.New("review: model returned an empty response")
-	// ErrInvalidReport は、AI の出力をレポートとして解釈できなかったことを示します。
+	// ErrInvalidReport reports that the AI output could not be interpreted as a report.
 	ErrInvalidReport = errors.New("review: report is not valid")
 )
 
-// パイプラインの工程名です。StepError.Step に入り、通知の文面などに利用できます。
+// Pipeline step names. They go into StepError.Step and can be used in notification text.
+//
+// Callers should compare against these constants, not their text: the values were Japanese
+// until 2026-11-10 and are English now, so StepError.Error() reads as one language
+// ("AI review failed: ...").
 const (
-	StepValidate = "リクエスト検証"
-	StepPrepare  = "リポジトリの準備"
-	StepDiff     = "コード差分取得"
-	StepPrompt   = "プロンプト生成"
-	StepCheckout = "Headチェックアウト"
-	StepReview   = "AIレビュー"
-	StepPublish  = "結果公開"
+	StepValidate = "request validation"
+	StepPrepare  = "repository preparation"
+	StepDiff     = "diff retrieval"
+	StepPrompt   = "prompt generation"
+	StepCheckout = "head checkout"
+	StepReview   = "AI review"
+	StepPublish  = "result publishing"
 )
 
-// StepError は、どの工程で失敗したかを保持するエラーです。
+// StepError is an error that records which step failed.
 //
-// 工程名を別フィールドではなくエラー自身に持たせます。工程名はエラーと一組でしか
-// 意味を持たないため、両者が離れていると取り違えが起きます。
+// The step name is held by the error itself rather than by a separate field. A step name only
+// means something paired with its error, and keeping the two apart invites mixing them up.
 type StepError struct {
 	Step string
 	Err  error
 }
 
-// Error はエラーメッセージを返します。
+// Error returns the error message.
 func (e *StepError) Error() string {
-	return fmt.Sprintf("%s に失敗しました: %v", e.Step, e.Err)
+	return fmt.Sprintf("%s failed: %v", e.Step, e.Err)
 }
 
-// Unwrap は元のエラーを返し、errors.Is / errors.As を通します。
+// Unwrap returns the underlying error so that errors.Is / errors.As see through it.
 func (e *StepError) Unwrap() error { return e.Err }
 
-// WrapStep は err に工程名を付与します。err が nil の場合は nil を返します。
+// WrapStep attaches a step name to err. It returns nil when err is nil.
 func WrapStep(step string, err error) error {
 	if err == nil {
 		return nil
@@ -81,7 +87,7 @@ func WrapStep(step string, err error) error {
 	return &StepError{Step: step, Err: err}
 }
 
-// StepOf は err に含まれる工程名を返します。工程名が付与されていない場合は空文字を返します。
+// StepOf returns the step name carried by err, or an empty string when none is attached.
 func StepOf(err error) string {
 	if se, ok := errors.AsType[*StepError](err); ok {
 		return se.Step

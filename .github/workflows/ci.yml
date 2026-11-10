@@ -1,4 +1,4 @@
-# CI の実体は shouni/workflows。ジョブ構成とタグ運用の理由はそちらの README にある。
+# The CI itself lives in shouni/workflows. The reasons for the job layout and tag handling are in its README.
 name: CI
 
 on:
@@ -18,6 +18,6 @@ jobs:
   ci:
     uses: shouni/workflows/.github/workflows/go-ci.yml@v1
     with:
-      # 補修とデコードはモデル出力（外部入力）を手書きで走査する。探索を毎回回す。
+      # The repair and decoding scan model output (external input) by hand. Run the exploration every time.
       fuzz-targets: "./review#FuzzSanitizeJSON ./review#FuzzParseReport"
       fuzz-time: 60s

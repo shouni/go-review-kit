@@ -100,8 +100,8 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only â
 
 ## Working conventions
 
-- Comments, doc comments, error messages, and README are Japanese. Commit messages are concise
-  English.
+- Comments, doc comments, error/log messages and READMEs follow "Conventions" below. Commit
+  messages are concise English.
 - Comments should explain *why*, not restate the code. Several comments in this repo record a
   decision and the failure it prevents (e.g. why refs resolve remote-branch-first, why publishing and
   cleanup detach from the caller's deadline) â€” keep that style and don't strip those explanations.
@@ -119,8 +119,8 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only â
   is for.
 - Wrap errors with `%w`, and attach the step with `review.WrapStep` at the pipeline boundary so
   `errors.Is` and `review.StepOf` both keep working.
-- Keep `README.md`'s package table and sequence diagram in sync with `review`/`pipeline` â€” they are
-  the authoritative architecture reference. The diagram is easy to let drift: `DiffSource.Close`
+- Keep `README.md`'s package table and sequence diagram (and the same parts of `README.ja.md`) in
+  sync with `review`/`pipeline` â€” they are the authoritative architecture reference. The diagram is easy to let drift: `DiffSource.Close`
   runs on `produce`'s defer, so it fires *before* publish, not after. The per-file project tree it
   used to carry is gone: it restated the package layout godoc already shows. The README's job is
   orientation and the SSH-only constraint, not a directory listing and not the contract â€” that
@@ -134,4 +134,13 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only â
 
 ## Conventions
 
-- **Error text**: sentinel errors are English with a package prefix (`review: diff is empty`) so a deeply wrapped error still names its origin; the context added by `fmt.Errorf` wrapping is Japanese. Existing English wrap text is not being retrofitted â€” apply the rule to code you touch.
+- **Language**: comments, doc comments, error / log / panic messages and test assertion messages
+  are English (moved from Japanese on 2026-11-10; do not mix Japanese back in). Japanese stays only
+  where it is data: model-output fixtures in tests. The step names in `review.Step*` are English
+  too (since 2026-11-10); callers compare against the constants, never the text. Test subtest names (`t.Run` names and table `name` fields)
+  are English too; Go test function names are unchanged.
+- **READMEs**: `README.md` is English and `README.ja.md` is its Japanese version. Update the two
+  together.
+- **Error text**: lowercase, no trailing punctuation (ST1005). Sentinel errors carry a package
+  prefix (`review: diff is empty`) so a deeply wrapped error still names its origin; context added
+  by `fmt.Errorf` wrapping is a short phrase naming the action (`clone: %w`, `resolve head ref: %w`).

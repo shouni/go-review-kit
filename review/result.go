@@ -5,19 +5,20 @@ import (
 	"time"
 )
 
-// Status は、レビューパイプラインの最終状態です。
+// Status is the final state of the review pipeline.
 type Status string
 
-// 値は受け取り側の表示分岐と、そこから保存される記録に現れます。変えるなら記録の方も
-// 一緒に始末してください。SKIPPED を SUCCESS へ畳まないのは、「差分が無くて何も公開していない」場合と
-// 成果物がある場合を呼び出し側が判別できなくなるためです（Result.Published も参照）。
+// The values appear in the receiving side's display branches and in the records stored from
+// them. If you change them, deal with those records as well. SKIPPED is not folded into SUCCESS
+// because callers could then no longer tell "there was no diff and nothing was published" from a
+// run that has an artifact (see also Result.Published).
 const (
 	StatusSucceeded Status = "SUCCESS"
 	StatusSkipped   Status = "SKIPPED"
 	StatusFailed    Status = "FAILURE"
 )
 
-// Result は、レビューパイプラインの最終結果です。
+// Result is the final result of the review pipeline.
 type Result struct {
 	Status     Status
 	StorageURI string
@@ -25,33 +26,33 @@ type Result struct {
 	Duration   time.Duration
 	Message    string
 
-	// DiffBytes は、AI へ送った差分の大きさです。差分を取れなかった場合は 0 です。
+	// DiffBytes is the size of the diff sent to the AI. It is 0 when the diff could not be taken.
 	//
-	// 所要時間と併せて、上限（差分の大きさ・実行時間）を実測から調整するための材料に
-	// なります。失敗した実行でも埋まります。上限が厳しすぎるかどうかを判断する材料は、
-	// 通った実行より弾かれた実行の側にあるためです。
+	// Together with the duration, it is material for tuning the limits (diff size, run time) from
+	// measurements. It is filled even for failed runs: the material for judging whether a limit is
+	// too strict lies with the runs that were rejected, not with the ones that passed.
 	DiffBytes int
-	// Run は、レビュアーが報告した実行の情報です。レビューまで到達しなかった場合は
-	// ゼロ値です。
+	// Run is the run information reported by the reviewer. It is the zero value when the run did
+	// not reach the review.
 	Run RunInfo
 }
 
-// Published は、成果物がストレージへ公開されたかどうかを返します。
+// Published reports whether the artifact was published to storage.
 func (r Result) Published() bool { return r.Status == StatusSucceeded }
 
-// Succeeded は、レビュー結果を公開できたときの Result を生成します。
+// Succeeded builds the Result for a review result that was published.
 func Succeeded(req Request, duration time.Duration) Result {
-	return newResult(req, StatusSucceeded, duration, "AIレビューが正常に完了しました。")
+	return newResult(req, StatusSucceeded, duration, "AI review completed successfully.")
 }
 
-// Skipped は、差分が無くレビューを行わなかったときの Result を生成します。
+// Skipped builds the Result for a run that did not review because there was no diff.
 func Skipped(req Request, duration time.Duration) Result {
-	return newResult(req, StatusSkipped, duration, "差分が存在しないため、レビューをスキップしました。")
+	return newResult(req, StatusSkipped, duration, "Review skipped because there is no diff.")
 }
 
-// Failed は、パイプラインが失敗したときの Result を生成します。
+// Failed builds the Result for a failed pipeline.
 func Failed(req Request, duration time.Duration, err error) Result {
-	message := fmt.Sprintf("レビューパイプラインでエラーが発生しました: %v", err)
+	message := fmt.Sprintf("Review pipeline failed: %v", err)
 	return newResult(req, StatusFailed, duration, message)
 }
 

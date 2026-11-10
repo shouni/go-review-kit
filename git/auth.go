@@ -12,10 +12,10 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// sshAuth は、リポジトリURLに応じた go-git の認証方式を組み立てます。
+// sshAuth builds the go-git auth method for a repository URL.
 //
-// SSH 形式でない場合は認証なし（nil）を返します。ここへ来るのはローカルパスだけです
-// （http(s) は validateRepoURL が先に断ります）。
+// For anything not in SSH form it returns no auth (nil). Only local paths get here (validateRepoURL
+// refuses http(s) first).
 func sshAuth(repoURL, sshKeyPath string) (transport.AuthMethod, error) {
 	if !isSSHURL(repoURL) {
 		return nil, nil
@@ -28,32 +28,32 @@ func sshAuth(repoURL, sshKeyPath string) (transport.AuthMethod, error) {
 
 	keyPath, err := expandTilde(sshKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("SSHキーパスの展開に失敗しました: %w", err)
+		return nil, fmt.Errorf("expand SSH key path: %w", err)
 	}
 	if keyPath == "" {
-		return nil, fmt.Errorf("SSH形式のリポジトリURLですが、SSHキーが設定されていません: %s", repoURL)
+		return nil, fmt.Errorf("repository URL is SSH but no SSH key is configured: %s", repoURL)
 	}
 
-	key, err := os.ReadFile(keyPath) //nolint:gosec // 鍵のパスは呼び出し側が設定する
+	key, err := os.ReadFile(keyPath) //nolint:gosec // the key path is set by the caller
 	if err != nil {
-		return nil, fmt.Errorf("SSHキーファイルの読み込みに失敗しました (%s): %w", keyPath, err)
+		return nil, fmt.Errorf("read SSH key file (%s): %w", keyPath, err)
 	}
 
-	// パスフレーズなしの鍵を前提とします。
-	// HostKeyCallback は設定しません。go-git 既定の known_hosts 検証
-	// （SSH_KNOWN_HOSTS、なければ ~/.ssh/known_hosts と /etc/ssh/ssh_known_hosts）に委ねます。
+	// Assumes a key without a passphrase.
+	// HostKeyCallback is not set; it is left to go-git's default known_hosts verification
+	// (SSH_KNOWN_HOSTS, or else ~/.ssh/known_hosts and /etc/ssh/ssh_known_hosts).
 	auth, err := ssh.NewPublicKeys(username, key, "")
 	if err != nil {
-		return nil, fmt.Errorf("SSH認証キーのロードに失敗しました: %w", err)
+		return nil, fmt.Errorf("load SSH auth key: %w", err)
 	}
 	return auth, nil
 }
 
-// isSSHURL は、リポジトリURLが SSH 形式かどうかを判定します。
+// isSSHURL reports whether a repository URL is in SSH form.
 //
-// http(s) を先に除外するのは、認証情報入りの URL（https://user@host/...）に @ が
-// 含まれ、scp 形式と取り違えられるためです。validateRepoURL が先に断るので通常は
-// 到達しませんが、この関数単体でも正しく判定できるようにしておきます。
+// http(s) is excluded first because a URL with credentials (https://user@host/...) contains an @
+// and would be mistaken for the scp form. validateRepoURL refuses it first, so this is normally not
+// reached, but the function still judges correctly on its own.
 func isSSHURL(repoURL string) bool {
 	if strings.HasPrefix(repoURL, "http://") || strings.HasPrefix(repoURL, "https://") {
 		return false
@@ -61,12 +61,12 @@ func isSSHURL(repoURL string) bool {
 	return strings.HasPrefix(repoURL, "ssh://") || strings.Contains(repoURL, "@")
 }
 
-// sshUsername は、リポジトリURLから SSH ユーザー名を取り出します。
+// sshUsername extracts the SSH user name from a repository URL.
 func sshUsername(repoURL string) (string, error) {
 	if strings.HasPrefix(repoURL, "ssh://") {
 		u, err := url.Parse(repoURL)
 		if err != nil {
-			return "", fmt.Errorf("リポジトリURLの解析に失敗しました: %w", err)
+			return "", fmt.Errorf("parse repository URL: %w", err)
 		}
 		if u.User != nil && u.User.Username() != "" {
 			return u.User.Username(), nil
@@ -74,41 +74,41 @@ func sshUsername(repoURL string) (string, error) {
 		return "git", nil
 	}
 
-	// scp 形式（user@host:path）。コロンより前に @ があるものだけを受け付けます。
+	// The scp form (user@host:path). Only accepted when an @ comes before the colon.
 	at := strings.Index(repoURL, "@")
 	colon := strings.Index(repoURL, ":")
 	if at > 0 && colon > at {
 		return repoURL[:at], nil
 	}
 
-	return "", fmt.Errorf("未対応のSSHリポジトリURL形式です: %s", repoURL)
+	return "", fmt.Errorf("unsupported SSH repository URL form: %s", repoURL)
 }
 
-// validateRepoURL は、このパッケージが扱えるリポジトリURLかを確かめます。
+// validateRepoURL checks that the repository URL is one this package can handle.
 //
-// 認証は SSH 鍵だけを扱います（WithSSHKey → GIT_SSH_COMMAND / go-git の PublicKeys）。
-// http(s) には資格情報を渡す経路が無く、公開リポジトリへ匿名で繋がるだけなので、
-// 「対応しているように見えて private では必ず失敗する」状態になります。ここで
-// 明示的に断り、利用者が形式を直せるようにします。
+// Authentication handles SSH keys only (WithSSHKey → GIT_SSH_COMMAND / go-git's PublicKeys).
+// http(s) has no path for passing credentials and only connects anonymously to public
+// repositories, so it would "look supported, yet always fail on private ones". It is refused
+// explicitly here so the user can fix the form.
 //
-// 受け付けるのは SSH 形式（git@host:owner/repo.git、ssh://[user@]host/path）と、
-// ローカルパスです。ローカルパスは開発とテストで使います。
+// Accepted are the SSH forms (git@host:owner/repo.git, ssh://[user@]host/path) and local paths.
+// Local paths are for development and tests.
 func validateRepoURL(repoURL string) error {
 	trimmed := strings.TrimSpace(repoURL)
 	if trimmed == "" {
-		return fmt.Errorf("%w: リポジトリURLが空です", review.ErrUnsupportedRepoURL)
+		return fmt.Errorf("%w: repository URL is empty", review.ErrUnsupportedRepoURL)
 	}
 
-	// "-" 始まりは git のオプションとして解釈されうるため拒否します。
-	// 正当なリポジトリURLがこの形になることはありません。
+	// A value starting with "-" can be read by git as an option, so it is refused.
+	// No legitimate repository URL takes this form.
 	if strings.HasPrefix(trimmed, "-") {
-		return fmt.Errorf("%w: %q で始まる値はオプションと区別できません", review.ErrUnsupportedRepoURL, "-")
+		return fmt.Errorf("%w: a value starting with %q cannot be told apart from an option", review.ErrUnsupportedRepoURL, "-")
 	}
 
 	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
 		return fmt.Errorf(
-			"%w: http(s) は未対応です（認証は SSH 鍵のみを扱います）。"+
-				"git@host:owner/repo.git または ssh://host/owner/repo.git の形式を使ってください: %s",
+			"%w: http(s) is not supported (authentication handles SSH keys only); "+
+				"use the git@host:owner/repo.git or ssh://host/owner/repo.git form: %s",
 			review.ErrUnsupportedRepoURL, redactURL(trimmed))
 	}
 

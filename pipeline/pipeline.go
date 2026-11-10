@@ -1,9 +1,9 @@
-// Package pipeline は、レビュー要求を受け取ってから成果物を公開・通知するまでの
-// 一連の流れを組み立てます。
+// Package pipeline assembles the whole flow from receiving a review request to publishing and
+// notifying the artifact.
 //
-// 工程は 1 階層です。全体制御と各工程を分けても、上の層は下へ委譲するだけになり、
-// 追う場所が増えるわりに得るものがありません。Run が唯一の入口で、Result と Report と
-// error を返します。
+// The steps form a single layer. Splitting overall control from the individual steps would leave
+// the upper layer only delegating downwards, adding places to follow for nothing in return. Run is
+// the only entry point, and it returns a Result, a Report and an error.
 package pipeline
 
 import (
@@ -18,18 +18,18 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// DefaultPublishTimeout は、公開と通知に与える既定の上限です。
+// DefaultPublishTimeout is the default limit given to publishing and notification.
 const DefaultPublishTimeout = 2 * time.Minute
 
-// Deps は、パイプラインが依存する外部実装です。
+// Deps holds the external implementations the pipeline depends on.
 //
-// 位置引数ではなく構造体で受け取るのは、同じ型（インターフェース）の引数が並ぶと
-// 順序を取り違えてもコンパイルが通ってしまうためです。
+// They arrive as a struct rather than positional arguments because, with several arguments of the
+// same type (interface) in a row, a mixed-up order would still compile.
 type Deps struct {
 	Sources review.DiffSourceFactory
-	// Prompts は、モードと差分から AI へ送るプロンプトを組み立てます。
+	// Prompts assembles the prompt sent to the AI from the mode and the diff.
 	Prompts review.PromptGenerator
-	// WorkspaceReviewer は、作業ディレクトリを調べてレビューするレビュアーです。
+	// WorkspaceReviewer is the reviewer that inspects the working directory and reviews.
 	WorkspaceReviewer review.WorkspaceReviewer
 	Publisher         review.Publisher
 	Notifier          review.Notifier
@@ -53,16 +53,16 @@ func (d Deps) validate() error {
 	}
 
 	if len(missing) > 0 {
-		return fmt.Errorf("pipeline: 依存が未設定です: %s", strings.Join(missing, ", "))
+		return fmt.Errorf("pipeline: missing dependencies: %s", strings.Join(missing, ", "))
 	}
 	return nil
 }
 
-// isNil は、インターフェース値が nil か、nil ポインタを収めているかを返します。
+// isNil reports whether an interface value is nil or holds a nil pointer.
 //
-// 素の `== nil` では後者を見逃します。生成に失敗した実装（(*T)(nil)）を渡されると
-// 検証を素通りし、最初に呼んだ時点で nil ポインタ参照になります。依存の検証は
-// 「起動時に落とす」ためにあるので、そこで捕まえます。
+// A plain `== nil` misses the latter. An implementation whose construction failed ((*T)(nil))
+// would slip through validation and become a nil pointer dereference on its first call. Dependency
+// validation exists to "fail at startup", so it is caught there.
 func isNil(v any) bool {
 	if v == nil {
 		return true
@@ -76,18 +76,18 @@ func isNil(v any) bool {
 	}
 }
 
-// Pipeline は、レビューの実行から公開・通知までを担います。
+// Pipeline runs a review and takes it through to publishing and notification.
 type Pipeline struct {
 	deps           Deps
 	logger         *slog.Logger
 	publishTimeout time.Duration
-	// runTimeout は差分取得〜AI レビューの上限です。0 は無制限。
+	// runTimeout is the limit from taking the diff to the AI review. 0 means unlimited.
 	runTimeout time.Duration
-	// maxDiffBytes は AI へ送る差分の上限（バイト）です。0 は無制限。
+	// maxDiffBytes is the limit (in bytes) on the diff sent to the AI. 0 means unlimited.
 	maxDiffBytes int
 }
 
-// New は Pipeline を生成します。依存に nil が含まれる場合はエラーを返します。
+// New creates a Pipeline. It returns an error when any dependency is nil.
 func New(deps Deps, opts ...Option) (*Pipeline, error) {
 	if err := deps.validate(); err != nil {
 		return nil, err
@@ -99,8 +99,8 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 		publishTimeout: DefaultPublishTimeout,
 	}
 	for _, opt := range opts {
-		// 条件付きでオプションを組み立てる呼び出し側は nil を混ぜがちです。
-		// パニックさせるほどの誤りではないので読み飛ばします。
+		// Callers that build options conditionally tend to mix in nil.
+		// It is not a mistake worth panicking over, so skip it.
 		if opt == nil {
 			continue
 		}
@@ -109,23 +109,23 @@ func New(deps Deps, opts ...Option) (*Pipeline, error) {
 	return p, nil
 }
 
-// Run は、レビュー要求の全工程を実行します。
+// Run executes every step of a review request.
 //
-// 戻り値の Report は、AI がレビューを返した場合のみ非 nil です。差分が無かった場合や、
-// レビューへ到達する前に失敗した場合は nil になります。保存に失敗した場合は Report が
-// 非 nil のままエラーも返るので、「レビューはできたが残せなかった」を呼び出し側で
-// 区別できます。戻り値を使う前に nil を確かめてください。
+// The returned Report is non-nil only when the AI returned a review. It is nil when there was no
+// diff or when the run failed before reaching the review. When storing fails, the Report stays
+// non-nil and an error is returned too, so the caller can tell "reviewed, but could not keep it".
+// Check for nil before using the return value.
 //
-// Report を返すのは、レビューの中身（題目・判定・指摘）を必要とする処理を通知フックへ
-// 相乗りさせずに済ませるためです。ジョブの状態を記録する呼び出し側が、通知を名乗る
-// アダプターを書かなくても戻り値から組み立てられます。
+// The Report is returned so that work needing the review's contents (title, verdict, findings)
+// does not have to ride on the notification hook. A caller recording job state can build it from
+// the return value without writing an adapter that poses as a notifier.
 //
-// 差分が無かった場合は StatusSkipped の Result と nil を返します（失敗ではないため）。
-// 「実行はしたが成果物は無い」は Result.Published で判別できます。
+// When there was no diff, it returns a StatusSkipped Result and nil (it is not a failure).
+// "It ran, but there is no artifact" can be told with Result.Published.
 //
-// 保存・通知・後始末は呼び出し元の締切から切り離して実行されるため、レビューが
-// タイムアウトで打ち切られた直後でも失敗の記録と通知は届きます。締切の掛かる範囲は
-// WithRunTimeout / WithPublishTimeout を参照してください。
+// Storing, notification and cleanup run detached from the caller's deadline, so the failure is
+// recorded and notified even right after the review was cut off by a timeout. For which range each
+// deadline covers, see WithRunTimeout / WithPublishTimeout.
 func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, *review.Report, error) {
 	start := time.Now()
 
@@ -133,7 +133,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		return p.fail(ctx, req, outcome{}, nil, review.WrapStep(review.StepValidate, err), time.Since(start))
 	}
 
-	// 締切はレビュー本体にだけ被せます（範囲の理由は WithRunTimeout を参照）。
+	// The deadline covers only the review itself (see WithRunTimeout for why that range).
 	runCtx := ctx
 	if p.runTimeout > 0 {
 		var cancel context.CancelFunc
@@ -148,7 +148,7 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	switch {
 	case errors.Is(err, review.ErrEmptyDiff):
 		result := out.into(review.Skipped(req, elapsed))
-		p.logger.InfoContext(ctx, "差分が無いためレビューをスキップしました",
+		p.logger.InfoContext(ctx, "skipped the review because there is no diff",
 			"job_id", req.JobID, "repo_url", req.RepoURL, "base", req.Base, "head", req.Head)
 		p.notify(ctx, review.Notification{Request: req, Result: result})
 		return result, nil, nil
@@ -161,14 +161,14 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 	defer cancel()
 
 	if err := p.deps.Publisher.Publish(publishCtx, req, report); err != nil {
-		// レビュー自体は成立しているため、Report は返します。
-		// publishCtx ではなく ctx を渡します。公開が予算を使い切って失敗した場合、
-		// publishCtx は既に期限切れなので、そのまま通知へ渡すと必ず不達になります。
+		// The review itself succeeded, so the Report is returned.
+		// Pass ctx, not publishCtx. When publishing fails having used up its budget, publishCtx
+		// has already expired, so handing it on to the notification would never deliver.
 		return p.fail(ctx, req, out, &report, review.WrapStep(review.StepPublish, err), elapsed)
 	}
 
 	result := out.into(review.Succeeded(req, elapsed))
-	p.logger.InfoContext(ctx, "レビューパイプラインが完了しました",
+	p.logger.InfoContext(ctx, "review pipeline completed",
 		"job_id", req.JobID,
 		"repo_url", req.RepoURL,
 		"status", result.Status,
@@ -177,33 +177,35 @@ func (p *Pipeline) Run(ctx context.Context, req review.Request) (review.Result, 
 		"duration", elapsed,
 		"truncated", result.Run.Truncated,
 	)
-	// 通知にも公開と別の予算を与えます。同じ context を使い回すと、公開に時間がかかった
-	// ぶんだけ通知の持ち時間が削られます。
+	// The notification also gets a budget separate from publishing. Reusing the same context
+	// would cut the notification's time by however long publishing took.
 	p.notify(ctx, review.Notification{Request: req, Result: result, Report: &report})
 
 	return result, &report, nil
 }
 
-// outcome は、produce が持ち帰る 1 回ぶんの結果です。
+// outcome is the result of one run that produce brings back.
 //
-// レポートと一緒に計測値も返すのは、失敗した実行でも数字を残すためです。上限が
-// 厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。
+// Measurements are returned along with the report so that the numbers survive even for failed
+// runs. The material for judging whether a limit is too strict lies with the runs that were
+// rejected, not with the ones that passed.
 type outcome struct {
 	report    review.Report
 	diffBytes int
 	info      review.RunInfo
 }
 
-// into は、計測値を Result へ写します。
+// into copies the measurements onto a Result.
 func (o outcome) into(result review.Result) review.Result {
 	result.DiffBytes = o.diffBytes
 	result.Run = o.info
 	return result
 }
 
-// produce は、差分の取得から AI レビューまでを実行します。
+// produce runs everything from taking the diff to the AI review.
 //
-// エラーを返す場合も、そこまでに分かった計測値は outcome に入れて返します。
+// Even when it returns an error, the measurements known up to that point are returned in the
+// outcome.
 func (p *Pipeline) produce(ctx context.Context, req review.Request) (outcome, error) {
 	var out outcome
 
@@ -222,12 +224,12 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (outcome, er
 	}
 	out.diffBytes = len(diff)
 
-	// ★ 大きすぎる差分は、送っても出力の途中切れか締切超過で失敗します。どちらも
-	// モデルを呼び終えたあとにしか分かりません。送る前に落として、利用者が手を
-	// 打てる形で返します（切り詰めない理由は WithMaxDiffBytes）。
+	// ★ An oversized diff fails even if sent, by truncated output or an exceeded deadline. Both
+	// are only known after the model call has finished. Stop before sending and return it in a
+	// form the user can act on (WithMaxDiffBytes explains why it is not truncated).
 	if p.maxDiffBytes > 0 && len(diff) > p.maxDiffBytes {
 		return out, review.WrapStep(review.StepDiff, fmt.Errorf(
-			"%w: %d バイト（上限 %d バイト）: base と head の範囲を狭めて再実行してください",
+			"%w: %d bytes (limit %d bytes): narrow the range between base and head and run again",
 			review.ErrDiffTooLarge, len(diff), p.maxDiffBytes))
 	}
 
@@ -236,18 +238,18 @@ func (p *Pipeline) produce(ctx context.Context, req review.Request) (outcome, er
 		return out, review.WrapStep(review.StepPrompt, err)
 	}
 
-	p.logger.InfoContext(ctx, "AIレビューを実行します", "mode", req.Mode, "model", req.Model, "diff_bytes", len(diff))
+	p.logger.InfoContext(ctx, "running AI review", "mode", req.Mode, "model", req.Model, "diff_bytes", len(diff))
 
 	out.report, out.info, err = p.review(ctx, source, req, prompt)
 	return out, err
 }
 
-// review は、Head をチェックアウトしたうえで AI レビューを実行します。
+// review checks Head out and then runs the AI review.
 func (p *Pipeline) review(
 	ctx context.Context, source review.DiffSource, req review.Request, prompt string,
 ) (review.Report, review.RunInfo, error) {
-	// Head を明示的にチェックアウトします（理由は review.Workspace のドキュメントを参照）。
-	// これを省くと、レビュアーは前回の実行が残した別参照の内容を読んでしまいます。
+	// Check Head out explicitly (see the review.Workspace documentation for why).
+	// Skipping this would have the reviewer read the contents of another ref left by a previous run.
 	dir, err := source.CheckoutHead(ctx, req.Head)
 	if err != nil {
 		return review.Report{}, review.RunInfo{}, review.WrapStep(review.StepCheckout, err)
@@ -259,43 +261,45 @@ func (p *Pipeline) review(
 		Head: req.Head,
 	})
 	if err != nil {
-		// 失敗しても計測値は持ち帰ります。トークンは既に消費されています。
+		// Bring the measurements back even on failure. The tokens have already been spent.
 		return review.Report{}, info, review.WrapStep(review.StepReview, err)
 	}
 	return report, info, nil
 }
 
-// close は DiffSource を解放します。
+// close releases the DiffSource.
 //
-// 呼び出し元の締切を外して渡すのは、レビューがタイムアウトで打ち切られた直後に
-// 後始末まで道連れで失敗すると、ローカルの作業ディレクトリが汚れたまま残るためです。
+// It is handed a context stripped of the caller's deadline because, if the cleanup went down along
+// with a review that was just cut off by a timeout, the local working directory would be left
+// dirty.
 func (p *Pipeline) close(ctx context.Context, source review.DiffSource) {
 	closeCtx, cancel := p.detach(ctx)
 	defer cancel()
 
 	if err := source.Close(closeCtx); err != nil {
-		p.logger.WarnContext(ctx, "差分取得元の解放に失敗しました", "error", err)
+		p.logger.WarnContext(ctx, "failed to release the diff source", "error", err)
 	}
 }
 
-// detach は、呼び出し元の締切と cancel を外し、代わりに publishTimeout を与えた
-// context を返します。
+// detach returns a context stripped of the caller's deadline and cancel, given publishTimeout
+// instead.
 //
-// ★ 公開・通知・後始末がここを通ります。呼び出し元の context をそのまま使うと、
-// レビューが締切で打ち切られた直後は既に期限切れなので、失敗を報告する通知や
-// 作業ディレクトリの後始末まで道連れで失敗します。いちばん報告が必要な場面でだけ
-// 届かない、という裏返った挙動になります。
+// ★ Publishing, notification and cleanup go through here. Using the caller's context as-is, it has
+// already expired right after a review is cut off by its deadline, so the notification reporting
+// the failure and the cleanup of the working directory would fail along with it. That is an
+// inverted behaviour: the report fails to arrive only when it is needed most.
 //
-// 呼び出しごとに新しく取ります。使い回すと、公開に時間がかかったぶんだけ通知の
-// 持ち時間が削られ、公開が上限まで粘って失敗した場合は通知が必ず不達になります。
+// A fresh one is taken per call. Reusing one would cut the notification's time by however long
+// publishing took, and when publishing held on to its limit and failed, the notification would
+// never be delivered.
 func (p *Pipeline) detach(ctx context.Context) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.WithoutCancel(ctx), p.publishTimeout)
 }
 
-// fail は、失敗を通知したうえで失敗の Result を返します。
+// fail notifies the failure and returns a failed Result.
 //
-// ★ 受け取るのは呼び出し元の context です。切り離しは notify が自分で行うので、
-// 切り離し済みのものを渡さないでください（理由は detach のコメント）。
+// ★ It takes the caller's context. notify does the detaching itself, so do not pass one that is
+// already detached (see the comment on detach for why).
 func (p *Pipeline) fail(
 	ctx context.Context,
 	req review.Request,
@@ -306,14 +310,14 @@ func (p *Pipeline) fail(
 ) (review.Result, *review.Report, error) {
 	result := out.into(review.Failed(req, elapsed, err))
 
-	p.logger.ErrorContext(ctx, "レビューパイプラインが失敗しました",
+	p.logger.ErrorContext(ctx, "review pipeline failed",
 		"job_id", req.JobID, "repo_url", req.RepoURL, "step", review.StepOf(err), "error", err)
 	p.notify(ctx, review.Notification{Request: req, Result: result, Report: report, Err: err})
 
 	return result, report, err
 }
 
-// notify は、締切を切り離した context で通知します。
+// notify notifies on a context detached from the deadline.
 func (p *Pipeline) notify(ctx context.Context, n review.Notification) {
 	notifyCtx, cancel := p.detach(ctx)
 	defer cancel()
@@ -321,12 +325,12 @@ func (p *Pipeline) notify(ctx context.Context, n review.Notification) {
 	p.notifyOn(notifyCtx, n)
 }
 
-// notifyOn は、既に切り離し済みの context で通知します。
+// notifyOn notifies on a context that is already detached.
 //
-// 通知の失敗は握り潰します（成果物は既に保存済みで、不達を理由に結果を失敗へ倒すと
-// 再実行の判断を誤らせるため）。
+// A notification failure is swallowed (the artifact is already stored, and turning the result into
+// a failure because a notification did not arrive would mislead the decision to rerun).
 func (p *Pipeline) notifyOn(ctx context.Context, n review.Notification) {
 	if err := p.deps.Notifier.Notify(ctx, n); err != nil {
-		p.logger.WarnContext(ctx, "通知に失敗しました", "status", n.Result.Status, "error", err)
+		p.logger.WarnContext(ctx, "notification failed", "status", n.Result.Status, "error", err)
 	}
 }

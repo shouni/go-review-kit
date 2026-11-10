@@ -8,21 +8,21 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// HTTP/HTTPS を先に除外するのが要点です。Basic 認証入りの URL にも @ が含まれるため、
-// 単純な @ の有無で判定すると scp 形式と取り違えます。
+// The point is to exclude HTTP/HTTPS first. A URL with Basic auth also contains an @, so judging by
+// the mere presence of @ would mistake it for the scp form.
 func TestIsSSHURL(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
 		want  bool
 	}{
-		{"scp形式", "git@github.com:shouni/example.git", true},
-		{"ssh スキーム", "ssh://git@github.com/shouni/example.git", true},
-		{"ユーザー名なしの ssh スキーム", "ssh://github.com/shouni/example.git", true},
+		{"scp form", "git@github.com:shouni/example.git", true},
+		{"ssh scheme", "ssh://git@github.com/shouni/example.git", true},
+		{"ssh scheme without user", "ssh://github.com/shouni/example.git", true},
 		{"https", "https://github.com/shouni/example.git", false},
 		{"http", "http://github.com/shouni/example.git", false},
-		{"Basic認証入りの https", "https://user@github.com/shouni/example.git", false},
-		{"ローカルパス", "/tmp/repo", false},
+		{"https with Basic auth", "https://user@github.com/shouni/example.git", false},
+		{"local path", "/tmp/repo", false},
 	}
 
 	for _, tt := range tests {
@@ -41,12 +41,12 @@ func TestSSHUsername(t *testing.T) {
 		want    string
 		wantErr bool
 	}{
-		{"scp形式", "git@github.com:shouni/example.git", "git", false},
-		{"scp形式の別ユーザー", "deploy@example.com:repo.git", "deploy", false},
-		{"ssh スキーム", "ssh://git@github.com/shouni/example.git", "git", false},
-		{"ssh スキームでユーザー省略時は git", "ssh://github.com/shouni/example.git", "git", false},
-		{"コロンが @ より前にある", "host:path@name", "", true},
-		{"@ が無い", "github.com/shouni/example.git", "", true},
+		{"scp form", "git@github.com:shouni/example.git", "git", false},
+		{"scp form with another user", "deploy@example.com:repo.git", "deploy", false},
+		{"ssh scheme", "ssh://git@github.com/shouni/example.git", "git", false},
+		{"ssh scheme defaults user to git", "ssh://github.com/shouni/example.git", "git", false},
+		{"colon before @", "host:path@name", "", true},
+		{"no @", "github.com/shouni/example.git", "", true},
 	}
 
 	for _, tt := range tests {
@@ -54,12 +54,12 @@ func TestSSHUsername(t *testing.T) {
 			got, err := sshUsername(tt.input)
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("エラーを期待しましたが %q が返りました", got)
+					t.Fatalf("want an error, got %q", got)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("予期しないエラー: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
 			if got != tt.want {
 				t.Errorf("sshUsername(%q) = %q, want %q", tt.input, got, tt.want)
@@ -69,39 +69,39 @@ func TestSSHUsername(t *testing.T) {
 }
 
 func TestSSHAuth(t *testing.T) {
-	t.Run("HTTPSは認証なし", func(t *testing.T) {
+	t.Run("HTTPS has no auth", func(t *testing.T) {
 		auth, err := sshAuth("https://github.com/shouni/example.git", "")
 		if err != nil {
-			t.Fatalf("予期しないエラー: %v", err)
+			t.Fatalf("unexpected error: %v", err)
 		}
 		if auth != nil {
-			t.Fatalf("認証なしを期待しましたが: %v", auth)
+			t.Fatalf("want no auth, got: %v", auth)
 		}
 	})
 
-	t.Run("SSHなのに鍵が未設定ならエラー", func(t *testing.T) {
+	t.Run("SSH without a key is an error", func(t *testing.T) {
 		if _, err := sshAuth("git@github.com:shouni/example.git", ""); err == nil {
-			t.Fatal("エラーを期待しましたが nil でした")
+			t.Fatal("want an error, got nil")
 		}
 	})
 
-	t.Run("鍵ファイルが存在しない", func(t *testing.T) {
+	t.Run("key file does not exist", func(t *testing.T) {
 		if _, err := sshAuth("git@github.com:shouni/example.git", "/nonexistent/id_ed25519"); err == nil {
-			t.Fatal("エラーを期待しましたが nil でした")
+			t.Fatal("want an error, got nil")
 		}
 	})
 
-	t.Run("未対応のURL形式", func(t *testing.T) {
+	t.Run("unsupported URL form", func(t *testing.T) {
 		if _, err := sshAuth("host:path@name", "/tmp/key"); err == nil {
-			t.Fatal("エラーを期待しましたが nil でした")
+			t.Fatal("want an error, got nil")
 		}
 	})
 }
 
-// 認証は SSH 鍵だけを扱うため、http(s) は明示的に断ります。
+// Authentication handles SSH keys only, so http(s) is refused explicitly.
 //
-// 断らないと、private リポジトリでは匿名アクセスになって必ず失敗し、
-// しかもエラーは git 由来の「認証に失敗」なので、形式の問題だと読めません。
+// Without that, a private repository would be accessed anonymously and always fail, and since the
+// error is git's "authentication failed", nobody could read it as a problem with the form.
 func TestValidateRepoURL(t *testing.T) {
 	t.Parallel()
 
@@ -110,27 +110,27 @@ func TestValidateRepoURL(t *testing.T) {
 		input   string
 		wantErr string
 	}{
-		{name: "scp 形式", input: "git@github.com:shouni/example.git"},
-		{name: "ssh スキーム", input: "ssh://git@github.com/shouni/example.git"},
-		{name: "ローカルパス", input: "/tmp/repos/example"},
+		{name: "scp form", input: "git@github.com:shouni/example.git"},
+		{name: "ssh scheme", input: "ssh://git@github.com/shouni/example.git"},
+		{name: "local path", input: "/tmp/repos/example"},
 		{
-			name:    "https は断る",
+			name:    "https is refused",
 			input:   "https://github.com/shouni/example.git",
 			wantErr: "http(s)",
 		},
 		{
-			name:    "http も断る",
+			name:    "http is refused too",
 			input:   "http://github.com/shouni/example.git",
 			wantErr: "http(s)",
 		},
 		{
-			// git のオプションと区別できないため拒否します。
-			name:    "ハイフン始まりは断る",
+			// Refused because it cannot be told apart from a git option.
+			name:    "leading hyphen is refused",
 			input:   "--upload-pack=/bin/echo",
-			wantErr: "オプション",
+			wantErr: "option",
 		},
-		{name: "空文字は断る", input: "", wantErr: "空"},
-		{name: "空白だけも断る", input: "   ", wantErr: "空"},
+		{name: "empty string is refused", input: "", wantErr: "empty"},
+		{name: "whitespace only is refused too", input: "   ", wantErr: "empty"},
 	}
 
 	for _, tt := range tests {
@@ -140,47 +140,47 @@ func TestValidateRepoURL(t *testing.T) {
 			err := validateRepoURL(tt.input)
 			if tt.wantErr == "" {
 				if err != nil {
-					t.Fatalf("通るはずの URL が拒否されました: %v", err)
+					t.Fatalf("a URL that should pass was rejected: %v", err)
 				}
 				return
 			}
 			if err == nil {
-				t.Fatalf("%q が素通りしました", tt.input)
+				t.Fatalf("%q slipped through", tt.input)
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("エラー %q に %q が含まれていません", err.Error(), tt.wantErr)
+				t.Errorf("error %q does not contain %q", err.Error(), tt.wantErr)
 			}
 		})
 	}
 }
 
-// 形式の誤りは番兵で判別できること。
+// A form mistake can be identified by its sentinel.
 //
-// 再試行しても直らない入力の誤りと、再試行で直りうる障害を呼び出し側が分けられるように
-// するためです。工程名（StepError）は「どこで」を示しますが、「直せるのか」は示しません。
+// This lets callers separate input mistakes that retrying does not fix from failures that
+// retrying may fix. The step name (StepError) says "where", but not "whether it can be fixed".
 func TestValidateRepoURLIsUnsupportedSentinel(t *testing.T) {
 	t.Parallel()
 
 	for _, input := range []string{"", "  ", "https://github.com/o/r.git", "--upload-pack=x"} {
 		err := validateRepoURL(input)
 		if err == nil {
-			t.Fatalf("%q が素通りしました", input)
+			t.Fatalf("%q slipped through", input)
 		}
 		if !errors.Is(err, review.ErrUnsupportedRepoURL) {
-			t.Errorf("validateRepoURL(%q) = %v, ErrUnsupportedRepoURL として判別できません", input, err)
+			t.Errorf("validateRepoURL(%q) = %v, cannot be identified as ErrUnsupportedRepoURL", input, err)
 		}
 	}
 }
 
-// 断るエラーメッセージに認証情報を載せないこと。
+// The refusal's error message does not carry credentials.
 func TestValidateRepoURLRedactsCredentials(t *testing.T) {
 	t.Parallel()
 
 	err := validateRepoURL("https://user:ghp_secret@github.com/o/r.git")
 	if err == nil {
-		t.Fatal("https が素通りしました")
+		t.Fatal("https slipped through")
 	}
 	if strings.Contains(err.Error(), "ghp_secret") {
-		t.Errorf("エラーに認証情報が載っています: %v", err)
+		t.Errorf("the error carries credentials: %v", err)
 	}
 }

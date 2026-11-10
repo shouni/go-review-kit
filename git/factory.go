@@ -9,31 +9,33 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// Source は、本パッケージのアダプターが満たす形です。
-// review.DiffSource に、リポジトリを使える状態にする Prepare を加えたものです。
+// Source is the shape the adapters in this package satisfy:
+// review.DiffSource plus Prepare, which makes the repository ready for use.
 type Source interface {
 	review.DiffSource
-	// Prepare は、リポジトリをクローン（または既存を利用）してリモートの最新を取得します。
+	// Prepare clones the repository (or reuses an existing one) and fetches the latest from the remote.
 	Prepare(ctx context.Context, repoURL string) error
 }
 
-// Factory は、Request ごとに作業ディレクトリを決めて Source を開く review.DiffSourceFactory です。
+// Factory is a review.DiffSourceFactory that picks a working directory per Request and opens a
+// Source there.
 //
-// 作業ディレクトリは root/<リポジトリURL由来の名前> です。同じリポジトリからは常に同じ
-// パスが得られるため、CLI 実装はチェックアウトを再利用できます。
+// The working directory is root/<a name derived from the repository URL>. The same repository
+// always yields the same path, so the CLI implementation can reuse its checkout.
 //
-// # 同じリポジトリの同時実行について
+// # Concurrent runs on the same repository
 //
-// 既定の命名は URL だけから決まるため、同じリポジトリのレビューを同時に走らせると
-// 同じ作業ディレクトリを共有します。本パッケージは排他を行いません。共有されると:
+// The default naming depends on the URL alone, so reviews of the same repository running at the
+// same time share one working directory. This package takes no lock. When it is shared:
 //
-//   - GoGit: 先に終わった側の Close が、まだ実行中の側の作業ディレクトリごと削除します。
-//   - CLI: 一方が読んでいる最中にもう一方が別ブランチへ checkout するため、
-//     エラーにならずに別ブランチの内容をレビューします（気付きにくい壊れ方です）。
+//   - GoGit: the Close of whichever finishes first deletes the working directory of the one still
+//     running.
+//   - CLI: one checks out another branch while the other is reading, so it reviews the other
+//     branch's contents without any error (a breakage that is hard to notice).
 //
-// 同一プロセスで同じリポジトリを並行にレビューする場合は、WithDirNamer で実行ごとに
-// 異なる名前を返してください（例: RepoDirName の結果へ実行 ID を足す）。
-// チェックアウトの再利用は諦めることになりますが、使い捨ての環境では元々効きません。
+// To review the same repository concurrently within one process, return a different name per run
+// with WithDirNamer (for example, append a run ID to the result of RepoDirName).
+// You give up reusing the checkout, but in a throwaway environment it never worked anyway.
 type Factory struct {
 	root      string
 	settings  settings
@@ -41,17 +43,17 @@ type Factory struct {
 	newSource func(localPath string, opts ...Option) (Source, error)
 }
 
-// 実装がポートを満たすことをコンパイル時に確認します。
+// Check at compile time that the implementation satisfies the port.
 var _ review.DiffSourceFactory = (*Factory)(nil)
 
-// NewGoGitFactory は、GoGit を開く Factory を生成します。
+// NewGoGitFactory creates a Factory that opens GoGit sources.
 func NewGoGitFactory(root string, opts ...Option) (*Factory, error) {
 	return newFactory(root, opts, func(localPath string, o ...Option) (Source, error) {
 		return NewGoGit(localPath, o...)
 	})
 }
 
-// NewCLIFactory は、CLI を開く Factory を生成します。
+// NewCLIFactory creates a Factory that opens CLI sources.
 func NewCLIFactory(root string, opts ...Option) (*Factory, error) {
 	return newFactory(root, opts, func(localPath string, o ...Option) (Source, error) {
 		return NewCLI(localPath, o...)
@@ -60,10 +62,10 @@ func NewCLIFactory(root string, opts ...Option) (*Factory, error) {
 
 func newFactory(root string, opts []Option, newSource func(string, ...Option) (Source, error)) (*Factory, error) {
 	if root == "" {
-		return nil, fmt.Errorf("git: 作業ディレクトリのルートが空です")
+		return nil, fmt.Errorf("git: working directory root is empty")
 	}
 
-	// 設定の検証をここで済ませ、Open のたびに同じエラーで失敗し続けるのを防ぎます。
+	// Validate the settings here, so Open does not keep failing with the same error every time.
 	s, err := newSettings(opts...)
 	if err != nil {
 		return nil, err
@@ -72,11 +74,11 @@ func newFactory(root string, opts []Option, newSource func(string, ...Option) (S
 	return &Factory{root: root, settings: s, opts: opts, newSource: newSource}, nil
 }
 
-// Open は、Request に対応する作業ディレクトリで Source を準備して返します。
+// Open prepares a Source in the working directory for the Request and returns it.
 func (f *Factory) Open(ctx context.Context, req review.Request) (review.DiffSource, error) {
 	localPath := filepath.Join(f.root, f.settings.dirNamer(req.RepoURL))
 
-	// 後始末で戻る先は Request ごとに変わるため、生成時のオプションへ追加します。
+	// The ref to return to on cleanup differs per Request, so it is appended to the options given at creation.
 	opts := append(slices.Clone(f.opts), WithBase(req.Base))
 
 	source, err := f.newSource(localPath, opts...)
@@ -85,10 +87,10 @@ func (f *Factory) Open(ctx context.Context, req review.Request) (review.DiffSour
 	}
 
 	if err := source.Prepare(ctx, req.RepoURL); err != nil {
-		// 途中まで作られた作業ディレクトリを残すと、次回の準備が壊れた状態から始まります。
-		// 後始末自体の失敗はここでは致命的ではないため、記録するだけにします。
+		// Leaving a half-built working directory behind would start the next preparation from a broken state.
+		// A failure of the cleanup itself is not fatal here, so it is only logged.
 		if closeErr := source.Close(context.WithoutCancel(ctx)); closeErr != nil {
-			f.settings.logger.WarnContext(ctx, "準備失敗後の後始末に失敗しました", "error", closeErr)
+			f.settings.logger.WarnContext(ctx, "cleanup after a failed prepare failed", "error", closeErr)
 		}
 		return nil, err
 	}

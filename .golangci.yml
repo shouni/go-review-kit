@@ -12,12 +12,12 @@ linters:
     - unused
     - gocritic
     - revive
-    # ★ このライブラリは **外部の信用できないリポジトリ**を clone して、その中の
-    # パスとファイルを扱います。パス結合・ファイル読み書き・サブプロセス起動が
-    # 攻撃面になるため、セキュリティリンターは外せません。
+    # ★ This library clones **external, untrusted repositories** and handles the paths and
+    # files inside them. Path joining, file reads and writes, and subprocess launches are
+    # attack surface, so the security linter cannot be dropped.
     - gosec
-    # 番兵エラー（review/errors.go）を公開しており、利用側は errors.Is/As で分岐します。
-    # == 比較や %v 誤用を見つけるのはこのリンターだけです。
+    # Sentinel errors (review/errors.go) are exported, and consumers branch with errors.Is/As.
+    # This linter is the only one that finds == comparisons and misuse of %v.
     - errorlint
     - copyloopvar
     - unconvert
@@ -28,11 +28,11 @@ linters:
         - (io.ReadCloser).Close
     gosec:
       excludes:
-        # G104 は errcheck と重複するため無効化します。
+        # G104 is disabled because it duplicates errcheck.
         - G104
   exclusions:
     rules:
-      # テストが自分で作ったフィクスチャを読む箇所です。外部入力ではありません。
+      # These are places where tests read fixtures they created themselves, not external input.
       - path: _test\.go
         linters:
           - gosec
