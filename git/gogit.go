@@ -16,12 +16,12 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// GoGit は、go-git による review.DiffSource 実装です。
+// GoGit is a review.DiffSource implementation on go-git.
 //
-// git バイナリを必要としません。Close で作業ディレクトリごと削除するため、実行のたびに
-// クローンし直す使い捨ての環境に向きます。
+// It needs no git binary. Close deletes the whole working directory, which suits throwaway
+// environments that clone afresh on every run.
 //
-// 単一の実行（Prepare → Diff → Close）で使う前提で、並行利用は想定していません。
+// It is meant for a single run (Prepare → Diff → Close) and is not designed for concurrent use.
 type GoGit struct {
 	localPath string
 	settings  settings
@@ -30,13 +30,13 @@ type GoGit struct {
 	auth transport.AuthMethod
 }
 
-// 実装がポートを満たすことをコンパイル時に確認します。
+// Check at compile time that the implementation satisfies the port.
 var _ Source = (*GoGit)(nil)
 
-// NewGoGit は、localPath を作業ディレクトリとする GoGit を生成します。
+// NewGoGit creates a GoGit whose working directory is localPath.
 func NewGoGit(localPath string, opts ...Option) (*GoGit, error) {
 	if localPath == "" {
-		return nil, fmt.Errorf("git: 作業ディレクトリのパスが空です")
+		return nil, fmt.Errorf("git: working directory path is empty")
 	}
 
 	s, err := newSettings(opts...)
@@ -46,16 +46,18 @@ func NewGoGit(localPath string, opts ...Option) (*GoGit, error) {
 	return &GoGit{localPath: localPath, settings: s}, nil
 }
 
-// Prepare は、リポジトリをクローン（既にあればオープン）し、リモートの最新を取得します。
+// Prepare clones the repository (or opens it if it already exists) and fetches the latest from
+// the remote.
 //
-// 受け付けるリポジトリURLは SSH 形式だけです。scp 形式（git@host:owner/repo.git）、
-// ssh:// スキーム（ssh://[user@]host/owner/repo.git）、および開発とテスト用の
-// ローカルパスの 3 形式を受け付けます。
+// Only SSH repository URLs are accepted. Three forms are accepted: the scp form
+// (git@host:owner/repo.git), the ssh:// scheme (ssh://[user@]host/owner/repo.git), and a local
+// path for development and tests.
 //
-// http(s) は形式のエラーとして断り、review.ErrUnsupportedRepoURL を包んだエラーを
-// 返します（クローンは試みません）。認証は SSH 鍵だけを扱うため http(s) には資格情報を
-// 渡す経路が無く、公開リポジトリへ匿名で繋がるだけで private では必ず失敗するためです。
-// 形式のエラーにしておくと、利用者が認証の失敗として調べずに済みます。
+// http(s) is refused as a form error, returning an error that wraps review.ErrUnsupportedRepoURL
+// (no clone is attempted). Authentication handles SSH keys only, so http(s) has no path for
+// passing credentials; it only connects anonymously to public repositories and always fails on
+// private ones. Making it a form error saves the user from investigating it as an authentication
+// failure.
 func (g *GoGit) Prepare(ctx context.Context, repoURL string) error {
 	if err := validateRepoURL(repoURL); err != nil {
 		return err
@@ -63,7 +65,7 @@ func (g *GoGit) Prepare(ctx context.Context, repoURL string) error {
 
 	auth, err := sshAuth(repoURL, g.settings.sshKeyPath)
 	if err != nil {
-		return fmt.Errorf("認証情報の構築に失敗しました: %w", err)
+		return fmt.Errorf("build credentials: %w", err)
 	}
 	g.auth = auth
 
@@ -77,14 +79,14 @@ func (g *GoGit) cloneOrOpen(ctx context.Context, repoURL string) error {
 	_, err := os.Stat(g.localPath)
 	switch {
 	case os.IsNotExist(err):
-		g.settings.logger.InfoContext(ctx, "リポジトリをクローンします", "url", repoURL, "path", g.localPath)
+		g.settings.logger.InfoContext(ctx, "cloning repository", "url", repoURL, "path", g.localPath)
 		repo, cloneErr := gogit.PlainCloneContext(ctx, g.localPath, false, &gogit.CloneOptions{
 			URL:          repoURL,
 			SingleBranch: false,
 			Auth:         g.auth,
 		})
 		if cloneErr != nil {
-			return fmt.Errorf("クローンに失敗しました: %w", cloneErr)
+			return fmt.Errorf("clone: %w", cloneErr)
 		}
 		g.repo = repo
 		return nil
@@ -92,19 +94,19 @@ func (g *GoGit) cloneOrOpen(ctx context.Context, repoURL string) error {
 	case err == nil:
 		repo, openErr := gogit.PlainOpen(g.localPath)
 		if openErr != nil {
-			return fmt.Errorf("既存リポジトリのオープンに失敗しました: %w", openErr)
+			return fmt.Errorf("open existing repository: %w", openErr)
 		}
-		g.settings.logger.InfoContext(ctx, "既存リポジトリをオープンしました", "path", g.localPath)
+		g.settings.logger.InfoContext(ctx, "opened existing repository", "path", g.localPath)
 		g.repo = repo
 		return nil
 
 	default:
-		return fmt.Errorf("作業ディレクトリの確認に失敗しました (%s): %w", g.localPath, err)
+		return fmt.Errorf("check working directory (%s): %w", g.localPath, err)
 	}
 }
 
 func (g *GoGit) fetch(ctx context.Context) error {
-	g.settings.logger.InfoContext(ctx, "リモートから最新を取得します", "remote", remoteName)
+	g.settings.logger.InfoContext(ctx, "fetching latest from remote", "remote", remoteName)
 
 	err := g.repo.FetchContext(ctx, &gogit.FetchOptions{
 		RemoteName: remoteName,
@@ -114,15 +116,15 @@ func (g *GoGit) fetch(ctx context.Context) error {
 		Progress:   io.Discard,
 	})
 	if err != nil && !errors.Is(err, gogit.NoErrAlreadyUpToDate) {
-		return fmt.Errorf("フェッチに失敗しました: %w", err)
+		return fmt.Errorf("fetch: %w", err)
 	}
 	return nil
 }
 
-// Diff は base と head のマージベースから head までの差分を返します。
+// Diff returns the diff from the merge base of base and head up to head.
 func (g *GoGit) Diff(ctx context.Context, base, head string) (string, error) {
 	if g.repo == nil {
-		return "", fmt.Errorf("git: Prepare が完了していません")
+		return "", fmt.Errorf("git: Prepare has not completed")
 	}
 
 	baseCommit, err := g.commit(base)
@@ -134,79 +136,80 @@ func (g *GoGit) Diff(ctx context.Context, base, head string) (string, error) {
 		return "", err
 	}
 
-	// 3 点比較にするため、マージベースを差分の起点にします。base 側で進んだコミットが
-	// 差分に混ざるのを防ぎ、head で行われた変更だけをレビュー対象にできます。
+	// For a three-dot comparison, the merge base is the starting point of the diff. This keeps
+	// commits that advanced on the base side out of the diff, so only changes made on head are
+	// reviewed.
 	mergeBases, err := baseCommit.MergeBase(headCommit)
 	if err != nil {
-		return "", fmt.Errorf("マージベースの検索に失敗しました: %w", err)
+		return "", fmt.Errorf("find merge base: %w", err)
 	}
 	if len(mergeBases) == 0 {
-		return "", fmt.Errorf("%s と %s に共通の祖先が見つかりませんでした", base, head)
+		return "", fmt.Errorf("no common ancestor found for %s and %s", base, head)
 	}
 
 	baseTree, err := mergeBases[0].Tree()
 	if err != nil {
-		return "", fmt.Errorf("ベースツリーの取得に失敗しました: %w", err)
+		return "", fmt.Errorf("get base tree: %w", err)
 	}
 	headTree, err := headCommit.Tree()
 	if err != nil {
-		return "", fmt.Errorf("ヘッドツリーの取得に失敗しました: %w", err)
+		return "", fmt.Errorf("get head tree: %w", err)
 	}
 
 	changes, err := object.DiffTreeWithOptions(ctx, baseTree, headTree, object.DefaultDiffTreeOptions)
 	if err != nil {
-		return "", fmt.Errorf("差分の計算に失敗しました: %w", err)
+		return "", fmt.Errorf("compute diff: %w", err)
 	}
 
 	patch, err := changes.PatchContext(ctx)
 	if err != nil {
-		return "", fmt.Errorf("パッチの生成に失敗しました: %w", err)
+		return "", fmt.Errorf("generate patch: %w", err)
 	}
 	return patch.String(), nil
 }
 
-// CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
-// review.DiffSource の実装です。
+// CheckoutHead force-checks head out into the working tree and returns its path.
+// It implements review.DiffSource.
 //
-// go-git のチェックアウトは context を受け取れないため、ctx は取り消しには効かず
-// ログにだけ使います（シグネチャはポート側の統一です）。
+// go-git's checkout cannot take a context, so ctx has no effect on cancellation and is used only
+// for logging (the signature is the port's common one).
 func (g *GoGit) CheckoutHead(ctx context.Context, head string) (string, error) {
 	if g.repo == nil {
-		return "", fmt.Errorf("git: Prepare が完了していません")
+		return "", fmt.Errorf("git: Prepare has not completed")
 	}
 
 	hash, err := g.resolve(head)
 	if err != nil {
-		return "", fmt.Errorf("head の参照を解決できませんでした: %w", err)
+		return "", fmt.Errorf("resolve head ref: %w", err)
 	}
 
 	worktree, err := g.repo.Worktree()
 	if err != nil {
-		return "", fmt.Errorf("ワークツリーの取得に失敗しました: %w", err)
+		return "", fmt.Errorf("get worktree: %w", err)
 	}
 
-	// Force で作業ツリーのローカル変更を破棄します。クローン直後は既定ブランチの内容の
-	// ままであり、レビュアーが読むのは必ず head の状態でなければならないためです。
+	// Force discards local changes in the working tree. Right after cloning it still holds the
+	// default branch's contents, and what the reviewer reads must always be the state of head.
 	if err := worktree.Checkout(&gogit.CheckoutOptions{Hash: hash, Force: true}); err != nil {
-		return "", fmt.Errorf("head のチェックアウトに失敗しました (%s): %w", head, err)
+		return "", fmt.Errorf("check out head (%s): %w", head, err)
 	}
 
-	g.settings.logger.InfoContext(ctx, "head をチェックアウトしました", "path", g.localPath, "head", head)
+	g.settings.logger.InfoContext(ctx, "checked out head", "path", g.localPath, "head", head)
 	return g.localPath, nil
 }
 
-// Close は作業ディレクトリを削除します。
+// Close deletes the working directory.
 func (g *GoGit) Close(ctx context.Context) error {
-	g.settings.logger.InfoContext(ctx, "作業ディレクトリを削除します", "path", g.localPath)
+	g.settings.logger.InfoContext(ctx, "removing working directory", "path", g.localPath)
 	g.repo = nil
 
 	if err := os.RemoveAll(g.localPath); err != nil {
-		return fmt.Errorf("作業ディレクトリの削除に失敗しました (%s): %w", g.localPath, err)
+		return fmt.Errorf("remove working directory (%s): %w", g.localPath, err)
 	}
 	return nil
 }
 
-// commit は参照文字列をコミットオブジェクトへ解決します。
+// commit resolves a ref string to a commit object.
 func (g *GoGit) commit(ref string) (*object.Commit, error) {
 	hash, err := g.resolve(ref)
 	if err != nil {
@@ -215,26 +218,26 @@ func (g *GoGit) commit(ref string) (*object.Commit, error) {
 
 	commit, err := g.repo.CommitObject(hash)
 	if err != nil {
-		return nil, fmt.Errorf("コミットの取得に失敗しました (%s): %w", ref, err)
+		return nil, fmt.Errorf("get commit (%s): %w", ref, err)
 	}
 	return commit, nil
 }
 
-// resolve は、参照文字列をコミットハッシュへ解決します。
-// 見つからない場合は review.ErrRefNotFound を包んだエラーを返します。
+// resolve resolves a ref string to a commit hash.
+// When it is not found, it returns an error wrapping review.ErrRefNotFound.
 //
-// ★ 「候補が無かった」と「読もうとして失敗した」を区別します。すべて ErrRefNotFound へ
-// 畳むと、リポジトリの破損やディスク障害まで「参照が見つかりません: main」として出て、
-// 番兵そのものが嘘をつきます。不在以外のエラーに当たったら最初の 1 件を返します。
+// ★ It distinguishes "no candidate existed" from "reading failed". Folding everything into
+// ErrRefNotFound would surface repository corruption and disk failures as "ref not found: main",
+// and the sentinel itself would lie. When it hits errors other than absence, it returns the first.
 func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 	if ref == "" {
-		return plumbing.ZeroHash, fmt.Errorf("%w: 参照名が空です", review.ErrRefNotFound)
+		return plumbing.ZeroHash, fmt.Errorf("%w: ref name is empty", review.ErrRefNotFound)
 	}
 
-	// readErr は、不在以外で最初に当たったエラーです。
+	// readErr is the first error hit other than absence.
 	var readErr error
 	keep := func(err error) {
-		// 不在は「次の候補を試す」理由であって障害ではありません。
+		// Absence is a reason to "try the next candidate", not a failure.
 		if errors.Is(err, plumbing.ErrReferenceNotFound) || errors.Is(err, plumbing.ErrObjectNotFound) {
 			return
 		}
@@ -246,9 +249,9 @@ func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 	for _, candidate := range refCandidates(ref) {
 		if candidate.isBranch {
 			name := plumbing.NewRemoteReferenceName(remoteName, localBranchName(candidate.ref))
-			// resolved=true にします。false だとシンボリック参照（origin/HEAD など）で
-			// Hash() が ZeroHash を返し、エラー無しで空のハッシュが解決結果として
-			// 通ってしまいます。
+			// Use resolved=true. With false, a symbolic ref (origin/HEAD and the like) makes
+			// Hash() return ZeroHash, and an empty hash passes as the resolution result with no
+			// error.
 			reference, err := g.repo.Reference(name, true)
 			if err != nil {
 				keep(err)
@@ -260,7 +263,7 @@ func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 			return reference.Hash(), nil
 		}
 
-		// ^{commit} を付けることで、アノテートタグもコミットまで剥がして解決します。
+		// Appending ^{commit} peels annotated tags down to their commit as well.
 		hash, err := g.repo.ResolveRevision(plumbing.Revision(candidate.ref + "^{commit}"))
 		if err != nil {
 			keep(err)
@@ -278,7 +281,7 @@ func (g *GoGit) resolve(ref string) (plumbing.Hash, error) {
 	}
 
 	if readErr != nil {
-		return plumbing.ZeroHash, fmt.Errorf("参照の解決に失敗しました (%s): %w", ref, readErr)
+		return plumbing.ZeroHash, fmt.Errorf("resolve ref (%s): %w", ref, readErr)
 	}
 	return plumbing.ZeroHash, fmt.Errorf("%w: %s", review.ErrRefNotFound, ref)
 }

@@ -14,13 +14,13 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/object"
 )
 
-// testRepo は、クローン元として使えるリポジトリです。
+// testRepo is a repository that can be used as a clone source.
 type testRepo struct {
-	// path はリポジトリのパスです。クローン元の URL としてそのまま渡せます。
+	// path is the repository's path. It can be passed as-is as the clone source URL.
 	path string
-	// base は初期コミットだけを持つブランチ名です。
+	// base is the name of the branch holding only the initial commit.
 	base string
-	// head は base から 1 コミット進んだブランチ名です。
+	// head is the name of the branch one commit ahead of base.
 	head string
 }
 
@@ -29,49 +29,49 @@ const (
 	testHeadBranch = "feature"
 )
 
-// newTestRepo は、base と head の 2 ブランチを持つリポジトリを作ります。
-// head 側にだけ差分があり、base はその祖先です。
+// newTestRepo creates a repository with two branches, base and head.
+// Only head has changes, and base is its ancestor.
 func newTestRepo(t *testing.T) testRepo {
 	t.Helper()
 
 	dir := t.TempDir()
 	repo, err := gogit.PlainInit(dir, false)
 	if err != nil {
-		t.Fatalf("リポジトリの初期化に失敗: %v", err)
+		t.Fatalf("failed to initialize the repository: %v", err)
 	}
 
 	worktree, err := repo.Worktree()
 	if err != nil {
-		t.Fatalf("ワークツリーの取得に失敗: %v", err)
+		t.Fatalf("failed to get the worktree: %v", err)
 	}
 
 	commit := func(content, message string) plumbing.Hash {
 		t.Helper()
 
 		if err := os.WriteFile(filepath.Join(dir, "main.go"), []byte(content), 0o600); err != nil {
-			t.Fatalf("ファイルの書き込みに失敗: %v", err)
+			t.Fatalf("failed to write the file: %v", err)
 		}
 		if _, err := worktree.Add("main.go"); err != nil {
-			t.Fatalf("ステージに失敗: %v", err)
+			t.Fatalf("failed to stage: %v", err)
 		}
 		hash, err := worktree.Commit(message, &gogit.CommitOptions{
 			Author: &object.Signature{Name: "test", Email: "test@example.com", When: time.Now()},
 		})
 		if err != nil {
-			t.Fatalf("コミットに失敗: %v", err)
+			t.Fatalf("failed to commit: %v", err)
 		}
 		return hash
 	}
 
-	initial := commit("package main\n\nfunc main() {}\n", "初期コミット")
+	initial := commit("package main\n\nfunc main() {}\n", "initial commit")
 
-	// 既定ブランチ名は環境によって変わるため、明示的に付け替えます。
+	// The default branch name varies by environment, so set it explicitly.
 	if err := worktree.Checkout(&gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(testBaseBranch),
 		Hash:   initial,
 		Create: true,
 	}); err != nil {
-		t.Fatalf("baseブランチの作成に失敗: %v", err)
+		t.Fatalf("failed to create the base branch: %v", err)
 	}
 
 	if err := worktree.Checkout(&gogit.CheckoutOptions{
@@ -79,36 +79,36 @@ func newTestRepo(t *testing.T) testRepo {
 		Hash:   initial,
 		Create: true,
 	}); err != nil {
-		t.Fatalf("headブランチの作成に失敗: %v", err)
+		t.Fatalf("failed to create the head branch: %v", err)
 	}
-	commit("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n", "hello を追加")
+	commit("package main\n\nfunc main() {\n\tprintln(\"hello\")\n}\n", "add hello")
 
-	// クローン元の HEAD は base に戻しておきます。
+	// Put the clone source's HEAD back on base.
 	if err := worktree.Checkout(&gogit.CheckoutOptions{
 		Branch: plumbing.NewBranchReferenceName(testBaseBranch),
 	}); err != nil {
-		t.Fatalf("baseブランチへの復帰に失敗: %v", err)
+		t.Fatalf("failed to return to the base branch: %v", err)
 	}
 
 	return testRepo{path: dir, base: testBaseBranch, head: testHeadBranch}
 }
 
-// localPath は、まだ存在しないクローン先のパスを返します。
+// localPath returns the path of a clone target that does not exist yet.
 func localPath(t *testing.T) string {
 	t.Helper()
 	return filepath.Join(t.TempDir(), "checkout")
 }
 
-// quietLogger は、テスト出力を汚さないロガーです。
+// quietLogger is a logger that keeps test output clean.
 func quietLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// requireGitBinary は、git コマンドが無い環境ではテストをスキップします。
+// requireGitBinary skips the test in environments without the git command.
 func requireGitBinary(t *testing.T) {
 	t.Helper()
 
 	if _, err := exec.LookPath("git"); err != nil {
-		t.Skip("git コマンドが見つからないためスキップします")
+		t.Skip("skipping: git command not found")
 	}
 }

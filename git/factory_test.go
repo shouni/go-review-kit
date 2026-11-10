@@ -23,17 +23,17 @@ func testRequestFor(repo testRepo) review.Request {
 
 func TestFactoryRejectsEmptyRoot(t *testing.T) {
 	if _, err := NewGoGitFactory(""); err == nil {
-		t.Fatal("GoGit: エラーを期待しましたが nil でした")
+		t.Fatal("GoGit: want an error, got nil")
 	}
 	if _, err := NewCLIFactory(""); err == nil {
-		t.Fatal("CLI: エラーを期待しましたが nil でした")
+		t.Fatal("CLI: want an error, got nil")
 	}
 }
 
-// 不正なオプションは Open のたびに失敗し続けるため、生成時に弾きます。
+// An invalid option would keep failing on every Open, so it is rejected at creation.
 func TestFactoryValidatesOptionsEagerly(t *testing.T) {
 	if _, err := NewGoGitFactory(t.TempDir(), WithContextLines(-1)); err == nil {
-		t.Fatal("エラーを期待しましたが nil でした")
+		t.Fatal("want an error, got nil")
 	}
 }
 
@@ -57,40 +57,40 @@ func TestFactoryOpen(t *testing.T) {
 
 			factory, err := tt.newF(root, WithLogger(quietLogger()))
 			if err != nil {
-				t.Fatalf("Factory の生成に失敗: %v", err)
+				t.Fatalf("failed to create the Factory: %v", err)
 			}
 
 			source, err := factory.Open(ctx, testRequestFor(repo))
 			if err != nil {
-				t.Fatalf("Open に失敗: %v", err)
+				t.Fatalf("Open failed: %v", err)
 			}
 			t.Cleanup(func() { _ = source.Close(context.Background()) })
 
-			// 作業ディレクトリは root 配下のリポジトリURL由来の名前になります。
+			// The working directory gets a name under root derived from the repository URL.
 			want := filepath.Join(root, RepoDirName(repo.path))
 			if _, err := os.Stat(want); err != nil {
-				t.Fatalf("期待した作業ディレクトリがありません (%s): %v", want, err)
+				t.Fatalf("the expected working directory is missing (%s): %v", want, err)
 			}
 
 			diff, err := source.Diff(ctx, repo.base, repo.head)
 			if err != nil {
-				t.Fatalf("差分の取得に失敗: %v", err)
+				t.Fatalf("failed to take the diff: %v", err)
 			}
 			if !strings.Contains(diff, "hello") {
-				t.Fatalf("差分の内容が一致しません:\n%s", diff)
+				t.Fatalf("diff contents do not match:\n%s", diff)
 			}
 		})
 	}
 }
 
-// 準備に失敗したら、途中まで作った作業ディレクトリを残しません。
-// 残ると、次回の準備が壊れた状態から始まります。
+// When preparation fails, the half-built working directory is not left behind.
+// If it were, the next preparation would start from a broken state.
 func TestFactoryOpenCleansUpOnPrepareFailure(t *testing.T) {
 	root := t.TempDir()
 
 	factory, err := NewGoGitFactory(root, WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("Factory の生成に失敗: %v", err)
+		t.Fatalf("failed to create the Factory: %v", err)
 	}
 
 	req := review.Request{
@@ -102,17 +102,17 @@ func TestFactoryOpenCleansUpOnPrepareFailure(t *testing.T) {
 	}
 
 	if _, err := factory.Open(context.Background(), req); err == nil {
-		t.Fatal("エラーを期待しましたが nil でした")
+		t.Fatal("want an error, got nil")
 	}
 
 	path := filepath.Join(root, RepoDirName(req.RepoURL))
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
-		t.Fatalf("失敗した作業ディレクトリが残っています: %v", err)
+		t.Fatalf("the failed working directory is still there: %v", err)
 	}
 }
 
-// Factory は Request ごとに基準参照を差し込みます。直接生成した場合と違い、
-// 呼び出し側が WithBase を意識する必要はありません。
+// A Factory injects the base ref per Request. Unlike direct creation, the caller does not need to
+// think about WithBase.
 func TestFactoryInjectsBase(t *testing.T) {
 	requireGitBinary(t)
 
@@ -121,24 +121,24 @@ func TestFactoryInjectsBase(t *testing.T) {
 
 	factory, err := NewCLIFactory(t.TempDir(), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("Factory の生成に失敗: %v", err)
+		t.Fatalf("failed to create the Factory: %v", err)
 	}
 
 	source, err := factory.Open(ctx, testRequestFor(repo))
 	if err != nil {
-		t.Fatalf("Open に失敗: %v", err)
+		t.Fatalf("Open failed: %v", err)
 	}
 
 	cli, ok := source.(*CLI)
 	if !ok {
-		t.Fatalf("CLI を期待しましたが %T でした", source)
+		t.Fatalf("want a CLI, got %T", source)
 	}
 	if cli.settings.base != repo.base {
 		t.Fatalf("base = %q, want %q", cli.settings.base, repo.base)
 	}
 
 	if err := source.Close(ctx); err != nil {
-		t.Fatalf("後始末に失敗: %v", err)
+		t.Fatalf("cleanup failed: %v", err)
 	}
 }
 
@@ -152,16 +152,16 @@ func TestFactoryUsesCustomDirNamer(t *testing.T) {
 		WithDirNamer(func(string) string { return "fixed-name" }),
 	)
 	if err != nil {
-		t.Fatalf("Factory の生成に失敗: %v", err)
+		t.Fatalf("failed to create the Factory: %v", err)
 	}
 
 	source, err := factory.Open(ctx, testRequestFor(repo))
 	if err != nil {
-		t.Fatalf("Open に失敗: %v", err)
+		t.Fatalf("Open failed: %v", err)
 	}
 	t.Cleanup(func() { _ = source.Close(context.Background()) })
 
 	if _, err := os.Stat(filepath.Join(root, "fixed-name")); err != nil {
-		t.Fatalf("差し替えた名前の作業ディレクトリがありません: %v", err)
+		t.Fatalf("no working directory with the replaced name: %v", err)
 	}
 }

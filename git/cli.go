@@ -14,36 +14,37 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// cleanArgs は、作業ツリーから残骸を落とすときの git clean の引数です。
+// cleanArgs are the git clean arguments used to clear leftovers from the working tree.
 //
-// -x（無視ファイルも消す）と 2 つ目の -f（ネストした git リポジトリも消す）が要ります。
-// これらが無いと、.gitignore に載る名前（node_modules/ や .env など）とベンダリングされた
-// リポジトリが残り、前回の実行の残骸が head の内容としてレビュアーに読まれます。
+// -x (remove ignored files too) and a second -f (remove nested git repositories too) are needed.
+// Without them, names listed in .gitignore (node_modules/, .env and so on) and vendored
+// repositories survive, and the reviewer reads a previous run's leftovers as the contents of head.
 var cleanArgs = []string{"clean", "-f", "-f", "-d", "-x"}
 
-// killGrace は、context のキャンセル後に git の後片付けを待つ猶予です。
+// killGrace is how long to wait for git to wind down after the context is cancelled.
 //
-// これが無いと、git が起動した ssh が親のパイプを継承したまま生き残り、cmd.Run は
-// パイプが閉じるまで返りません。相手が黙って切れた場合、キャンセルしたはずの処理が
-// 数分単位で居座ります。
+// Without it, an ssh started by git survives holding the parent's pipes, and cmd.Run does not
+// return until the pipes close. If the other end drops silently, work that was supposedly
+// cancelled lingers for minutes.
 const killGrace = 5 * time.Second
 
-// CLI は、ローカルの git コマンドを呼び出す review.DiffSource 実装です。
+// CLI is a review.DiffSource implementation that calls the local git command.
 //
-// Close で作業ディレクトリを消さず、基準参照へ戻して掃除するだけなので、次回以降は
-// 差分の取得だけで済みます。永続的な作業ディレクトリを持てる環境向けです。
+// Close does not delete the working directory; it only returns to the base ref and cleans up, so
+// later runs only need to take the diff. It is meant for environments that can keep a persistent
+// working directory.
 type CLI struct {
 	localPath string
 	settings  settings
 }
 
-// 実装がポートを満たすことをコンパイル時に確認します。
+// Check at compile time that the implementation satisfies the port.
 var _ Source = (*CLI)(nil)
 
-// NewCLI は、localPath を作業ディレクトリとする CLI を生成します。
+// NewCLI creates a CLI whose working directory is localPath.
 func NewCLI(localPath string, opts ...Option) (*CLI, error) {
 	if localPath == "" {
-		return nil, fmt.Errorf("git: 作業ディレクトリのパスが空です")
+		return nil, fmt.Errorf("git: working directory path is empty")
 	}
 
 	s, err := newSettings(opts...)
@@ -53,16 +54,18 @@ func NewCLI(localPath string, opts ...Option) (*CLI, error) {
 	return &CLI{localPath: localPath, settings: s}, nil
 }
 
-// Prepare は、リポジトリをクローン（既にあればそのまま利用）し、リモートの最新を取得します。
+// Prepare clones the repository (or uses it as-is if it already exists) and fetches the latest
+// from the remote.
 //
-// 受け付けるリポジトリURLは SSH 形式だけです。scp 形式（git@host:owner/repo.git）、
-// ssh:// スキーム（ssh://[user@]host/owner/repo.git）、および開発とテスト用の
-// ローカルパスの 3 形式を受け付けます。
+// Only SSH repository URLs are accepted. Three forms are accepted: the scp form
+// (git@host:owner/repo.git), the ssh:// scheme (ssh://[user@]host/owner/repo.git), and a local
+// path for development and tests.
 //
-// http(s) は形式のエラーとして断り、review.ErrUnsupportedRepoURL を包んだエラーを
-// 返します（クローンは試みません）。認証は SSH 鍵だけを扱うため http(s) には資格情報を
-// 渡す経路が無く、公開リポジトリへ匿名で繋がるだけで private では必ず失敗するためです。
-// 形式のエラーにしておくと、利用者が認証の失敗として調べずに済みます。
+// http(s) is refused as a form error, returning an error that wraps review.ErrUnsupportedRepoURL
+// (no clone is attempted). Authentication handles SSH keys only, so http(s) has no path for
+// passing credentials; it only connects anonymously to public repositories and always fails on
+// private ones. Making it a form error saves the user from investigating it as an authentication
+// failure.
 func (c *CLI) Prepare(ctx context.Context, repoURL string) error {
 	if err := validateRepoURL(repoURL); err != nil {
 		return err
@@ -73,7 +76,7 @@ func (c *CLI) Prepare(ctx context.Context, repoURL string) error {
 	}
 
 	if _, err := c.run(ctx, "fetch", remoteName, "--prune"); err != nil {
-		return fmt.Errorf("フェッチに失敗しました: %w", err)
+		return fmt.Errorf("fetch: %w", err)
 	}
 	return nil
 }
@@ -83,50 +86,50 @@ func (c *CLI) cloneIfNeeded(ctx context.Context, repoURL string) error {
 	switch {
 	case err == nil:
 		if !info.IsDir() {
-			return fmt.Errorf("作業ディレクトリのパスがディレクトリではありません: %s", c.localPath)
+			return fmt.Errorf("working directory path is not a directory: %s", c.localPath)
 		}
 		if _, gitErr := os.Stat(filepath.Join(c.localPath, ".git")); gitErr != nil {
 			if os.IsNotExist(gitErr) {
-				return fmt.Errorf("%s は存在しますが Git リポジトリではありません", c.localPath)
+				return fmt.Errorf("%s exists but is not a Git repository", c.localPath)
 			}
-			return fmt.Errorf("%s の .git の確認に失敗しました: %w", c.localPath, gitErr)
+			return fmt.Errorf("check .git in %s: %w", c.localPath, gitErr)
 		}
-		c.settings.logger.InfoContext(ctx, "既存のチェックアウトを再利用します", "path", c.localPath)
+		c.settings.logger.InfoContext(ctx, "reusing existing checkout", "path", c.localPath)
 		return nil
 
 	case os.IsNotExist(err):
 		return c.clone(ctx, repoURL)
 
 	default:
-		return fmt.Errorf("作業ディレクトリの確認に失敗しました (%s): %w", c.localPath, err)
+		return fmt.Errorf("check working directory (%s): %w", c.localPath, err)
 	}
 }
 
 func (c *CLI) clone(ctx context.Context, repoURL string) error {
 	parent := filepath.Dir(c.localPath)
 	if err := os.MkdirAll(parent, 0o750); err != nil {
-		return fmt.Errorf("親ディレクトリの作成に失敗しました (%s): %w", parent, err)
+		return fmt.Errorf("create parent directory (%s): %w", parent, err)
 	}
 
-	c.settings.logger.InfoContext(ctx, "リポジトリをクローンします", "url", redactURL(repoURL), "path", c.localPath)
+	c.settings.logger.InfoContext(ctx, "cloning repository", "url", redactURL(repoURL), "path", c.localPath)
 
-	// clone だけは作業ディレクトリがまだ無いため、親ディレクトリで実行します。
-	// "--" を挟むのは、URL がオプションとして解釈されるのを防ぐためです
-	// （"--upload-pack=..." のような値を渡されると git はオプションとして読みます）。
+	// clone alone runs in the parent directory, since the working directory does not exist yet.
+	// "--" is inserted to keep the URL from being interpreted as an option
+	// (given a value like "--upload-pack=...", git reads it as an option).
 	if _, err := c.runIn(ctx, parent, "clone", "--", repoURL, filepath.Base(c.localPath)); err != nil {
-		// 作りかけを残しません。残すと次回以降 cloneIfNeeded が「既存のチェックアウトを
-		// 再利用します」と判定し、以後の fetch が not a git repository で失敗し続けます
-		// （手で消すまで、そのリポジトリのレビューが永久に通りません）。
+		// Leave nothing half-built. Otherwise cloneIfNeeded later decides it is "reusing existing
+		// checkout", and every fetch after that keeps failing with not a git repository
+		// (reviews of that repository never pass again until someone deletes it by hand).
 		if rmErr := os.RemoveAll(c.localPath); rmErr != nil {
-			c.settings.logger.WarnContext(ctx, "クローン失敗後の作業ディレクトリを削除できませんでした",
+			c.settings.logger.WarnContext(ctx, "could not remove the working directory after a failed clone",
 				"path", c.localPath, "error", rmErr)
 		}
-		return fmt.Errorf("クローンに失敗しました: %w", err)
+		return fmt.Errorf("clone: %w", err)
 	}
 	return nil
 }
 
-// Diff は base と head の 3 点比較差分を返します。
+// Diff returns the three-dot diff between base and head.
 func (c *CLI) Diff(ctx context.Context, base, head string) (string, error) {
 	baseRef, _, err := c.resolve(ctx, base)
 	if err != nil {
@@ -137,7 +140,7 @@ func (c *CLI) Diff(ctx context.Context, base, head string) (string, error) {
 		return "", err
 	}
 
-	c.settings.logger.InfoContext(ctx, "差分を取得します", "base", baseRef, "head", headRef)
+	c.settings.logger.InfoContext(ctx, "taking diff", "base", baseRef, "head", headRef)
 
 	return c.run(ctx,
 		"diff",
@@ -146,42 +149,42 @@ func (c *CLI) Diff(ctx context.Context, base, head string) (string, error) {
 	)
 }
 
-// CheckoutHead は、head を作業ツリーへ強制チェックアウトし、そのパスを返します。
-// review.DiffSource の実装です。
+// CheckoutHead force-checks head out into the working tree and returns its path.
+// It implements review.DiffSource.
 //
-// チェックアウト後に未追跡ファイルも削除します。作業ディレクトリは実行をまたいで
-// 再利用されるため、前回の実行が Close まで到達せず落ちていた場合の残骸が、head の
-// 内容としてレビュアーに読まれるのを防ぎます。
+// Untracked files are removed after the checkout too. The working directory is reused across
+// runs, so this keeps the reviewer from reading, as the contents of head, leftovers from a
+// previous run that crashed before reaching Close.
 func (c *CLI) CheckoutHead(ctx context.Context, head string) (string, error) {
 	headRef, isBranch, err := c.resolve(ctx, head)
 	if err != nil {
-		return "", fmt.Errorf("head の参照を解決できませんでした: %w", err)
+		return "", fmt.Errorf("resolve head ref: %w", err)
 	}
 
 	if err := c.forceCheckout(ctx, headRef, isBranch); err != nil {
-		return "", fmt.Errorf("head のチェックアウトに失敗しました: %w", err)
+		return "", fmt.Errorf("check out head: %w", err)
 	}
 
 	if _, err := c.run(ctx, cleanArgs...); err != nil {
-		return "", fmt.Errorf("head チェックアウト後のクリーンに失敗しました: %w", err)
+		return "", fmt.Errorf("clean after head checkout: %w", err)
 	}
 
-	c.settings.logger.InfoContext(ctx, "head をチェックアウトしました", "path", c.localPath, "head", headRef)
+	c.settings.logger.InfoContext(ctx, "checked out head", "path", c.localPath, "head", headRef)
 	return c.localPath, nil
 }
 
-// Close は、基準参照へ強制的に戻したうえで未追跡ファイルを削除します。
-// 作業ディレクトリ自体は次回の実行で再利用するため残します。
+// Close forces the working tree back to the base ref and then removes untracked files.
+// The working directory itself is kept, to be reused by the next run.
 //
-// ★ 掃除を先に、フェッチを後に行います。後始末の先頭にネットワーク I/O を置くと、
-// レビュー末尾で通信が落ちていたり締切を使い切っていたりしたときに、
-// 作業ツリーが head のまま・未追跡ファイルも残ったまま次回へ持ち越されます。
-// フェッチは次回の参照解決を新しく保つための best-effort なので、失敗しても
-// 後始末そのものは成立させます。
+// ★ Clean first, fetch afterwards. With network I/O at the head of the cleanup, if the connection
+// had dropped or the deadline was used up at the end of the review, the working tree would carry
+// over to the next run still at head, with its untracked files still there.
+// The fetch is best-effort, to keep the next ref resolution fresh, so the cleanup itself succeeds
+// even when it fails.
 func (c *CLI) Close(ctx context.Context) error {
-	// 未追跡ファイルは checkout では消えないので、先に落とします。
+	// checkout does not remove untracked files, so drop them first.
 	if _, err := c.run(ctx, cleanArgs...); err != nil {
-		return fmt.Errorf("後始末のクリーンに失敗しました: %w", err)
+		return fmt.Errorf("clean on cleanup: %w", err)
 	}
 
 	if err := c.checkoutBase(ctx); err != nil {
@@ -189,37 +192,37 @@ func (c *CLI) Close(ctx context.Context) error {
 	}
 
 	if _, err := c.run(ctx, "fetch", remoteName); err != nil {
-		c.settings.logger.WarnContext(ctx, "後始末のフェッチに失敗しました（掃除は完了しています）",
+		c.settings.logger.WarnContext(ctx, "fetch on cleanup failed (cleaning has completed)",
 			"path", c.localPath, "error", err)
 	}
 
-	c.settings.logger.InfoContext(ctx, "後始末が完了しました", "path", c.localPath, "base", c.settings.base)
+	c.settings.logger.InfoContext(ctx, "cleanup completed", "path", c.localPath, "base", c.settings.base)
 	return nil
 }
 
 func (c *CLI) checkoutBase(ctx context.Context) error {
 	if c.settings.base == "" {
-		// Factory 経由なら Request.Base が必ず入るため、ここに来るのは直接生成した場合だけです。
-		// 戻る先が決められないので、掃除だけ行います。
-		c.settings.logger.WarnContext(ctx, "基準参照が未設定のため、チェックアウトを省略します")
+		// Through a Factory, Request.Base is always set, so this is reached only when created directly.
+		// There is no ref to return to, so only clean.
+		c.settings.logger.WarnContext(ctx, "base ref is not set, skipping checkout")
 		return nil
 	}
 
 	baseRef, isBranch, err := c.resolve(ctx, c.settings.base)
 	if err != nil {
-		return fmt.Errorf("後始末の基準参照を解決できませんでした: %w", err)
+		return fmt.Errorf("resolve base ref on cleanup: %w", err)
 	}
 
 	if err := c.forceCheckout(ctx, baseRef, isBranch); err != nil {
-		return fmt.Errorf("後始末のチェックアウトに失敗しました: %w", err)
+		return fmt.Errorf("check out on cleanup: %w", err)
 	}
 	return nil
 }
 
-// forceCheckout は、解決済みの参照へ作業ツリーを強制的に切り替えます。
+// forceCheckout forcibly switches the working tree to a resolved ref.
 //
-// -f を付けてローカルの変更を破棄します。前回の実行が途中で落ちていても、
-// 次の実行を必ずきれいな状態から始められるようにするためです。
+// -f discards local changes, so that the next run always starts from a clean state even if a
+// previous run crashed partway.
 func (c *CLI) forceCheckout(ctx context.Context, ref string, isBranch bool) error {
 	args := []string{"checkout", "-f", ref}
 	if isBranch {
@@ -229,10 +232,10 @@ func (c *CLI) forceCheckout(ctx context.Context, ref string, isBranch bool) erro
 	return err
 }
 
-// resolve は、参照文字列をリモートブランチまたはコミットとして解決します。
+// resolve resolves a ref string as a remote branch or a commit.
 func (c *CLI) resolve(ctx context.Context, ref string) (resolved string, isBranch bool, err error) {
 	if strings.TrimSpace(ref) == "" {
-		return "", false, fmt.Errorf("%w: 参照名が空です", review.ErrRefNotFound)
+		return "", false, fmt.Errorf("%w: ref name is empty", review.ErrRefNotFound)
 	}
 
 	for _, candidate := range refCandidates(ref) {
@@ -243,55 +246,56 @@ func (c *CLI) resolve(ctx context.Context, ref string) (resolved string, isBranc
 	return "", false, fmt.Errorf("%w: %s", review.ErrRefNotFound, ref)
 }
 
-// run は、作業ディレクトリで git コマンドを実行し、標準出力を返します。
+// run runs a git command in the working directory and returns its standard output.
 func (c *CLI) run(ctx context.Context, args ...string) (string, error) {
 	return c.runIn(ctx, c.localPath, args...)
 }
 
-// runIn は、指定ディレクトリで git コマンドを実行し、標準出力を返します。
+// runIn runs a git command in the given directory and returns its standard output.
 //
-// 標準出力と標準エラーを分けて受け取るのが要点です。まとめて取ると、git が出す警告
-// （detached HEAD の注意書きなど）が差分の本文に混ざり、そのまま AI へ渡ってしまいます。
+// The point is to capture standard output and standard error separately. Capturing them together
+// would mix git's warnings (such as the detached HEAD notice) into the diff body and pass them
+// straight to the AI.
 func (c *CLI) runIn(ctx context.Context, dir string, args ...string) (string, error) {
 	var stdout, stderr bytes.Buffer
 
-	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args はこのパッケージが組み立て、ref は resolve が検証済み
+	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // args are built by this package, and refs are already validated by resolve
 	cmd.Dir = dir
 	cmd.Env = c.env()
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	// キャンセル後に子プロセスが居座ってもここで打ち切ります（killGrace のコメント参照）。
+	// Even if a child process lingers after cancellation, cut it off here (see the comment on killGrace).
 	cmd.WaitDelay = killGrace
 
-	c.settings.logger.DebugContext(ctx, "gitコマンドを実行します", "dir", dir, "args", args)
+	c.settings.logger.DebugContext(ctx, "running git command", "dir", dir, "args", args)
 
 	if err := cmd.Run(); err != nil {
-		// git は失敗時に URL 全体を stderr へ出すため、認証情報が混じっていると
-		// そのままエラーとして呼び出し側のログや通知へ流れます。
+		// On failure git prints the whole URL to stderr, so any credentials in it would flow
+		// straight into the caller's logs and notifications as part of the error.
 		message := redactURL(strings.TrimSpace(stderr.String()))
 
 		if exitErr, ok := errors.AsType[*exec.ExitError](err); ok {
-			c.settings.logger.DebugContext(ctx, "gitコマンドが失敗しました",
+			c.settings.logger.DebugContext(ctx, "git command failed",
 				"args", args, "exit", exitErr.ExitCode(), "stderr", message)
-			return "", fmt.Errorf("git %s が終了コード %d で失敗しました: %s: %w",
+			return "", fmt.Errorf("git %s exited with code %d: %s: %w",
 				strings.Join(args, " "), exitErr.ExitCode(), message, err)
 		}
-		return "", fmt.Errorf("git %s の実行に失敗しました: %w", strings.Join(args, " "), err)
+		return "", fmt.Errorf("run git %s: %w", strings.Join(args, " "), err)
 	}
 
 	return strings.TrimSpace(stdout.String()), nil
 }
 
-// env は、SSH 鍵を指定した GIT_SSH_COMMAND を加えた環境変数を返します。
+// env returns the environment with a GIT_SSH_COMMAND naming the SSH key added.
 func (c *CLI) env() []string {
 	env := os.Environ()
 	if c.settings.sshKeyPath == "" {
 		return env
 	}
 
-	// GIT_SSH_COMMAND はシェル経由で解釈されるため、パスをクォートしてから埋め込みます。
-	// -F /dev/null で ssh_config を無視し、実行環境ごとの設定差に左右されないようにします。
-	// ホストキー検証は ssh 既定の known_hosts に委ねます。
+	// GIT_SSH_COMMAND is interpreted through a shell, so the path is quoted before embedding.
+	// -F /dev/null ignores ssh_config so the result does not depend on per-environment settings.
+	// Host key verification is left to ssh's default known_hosts.
 	sshCommand := fmt.Sprintf("ssh -i %s -F /dev/null", quotePathForShell(c.settings.sshKeyPath))
 	return append(env, "GIT_SSH_COMMAND="+sshCommand)
 }

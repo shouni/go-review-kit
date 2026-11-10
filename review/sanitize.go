@@ -6,28 +6,30 @@ import (
 	"strings"
 )
 
-// SanitizeJSON は、AI が返した JSON をそのままでは解釈できないときに補修します。
+// SanitizeJSON repairs JSON returned by the AI when it cannot be interpreted as-is.
 //
-// 構造化出力（ResponseSchema / OutputSchema）を指定しても、モデルは次の形で崩すことが
-// あります。どれも応答を返しきったあとの話なので、API の再試行では直りません。
+// Even with structured output (ResponseSchema / OutputSchema) specified, the model can break the
+// output in the following ways. All of them happen after the response has been fully returned, so
+// retrying the API call does not fix them.
 //
-//   - Markdown のフェンス（```json … ```）で包む
-//   - 完結した JSON の後ろに説明文や余分な閉じ括弧を継ぎ足す
-//   - 文字列の中でバックスラッシュをエスケープし忘れる（ソースを引用したとき）
-//   - 文字列の中に改行やタブを生のまま入れる（複数行を引用したとき）
+//   - Wrapping it in a Markdown fence (```json … ```)
+//   - Appending remarks or extra closing brackets after a complete JSON value
+//   - Forgetting to escape a backslash inside a string (when quoting source)
+//   - Putting raw newlines or tabs inside a string (when quoting multiple lines)
 //
-// 既に解釈できる入力は 1 バイトも変えません。補修しても妥当な JSON にならなければ
-// 入力をそのまま返します。呼び出し側のエラーメッセージが元の壊れ方を指したままになるよう、
-// 悪化させないことを優先します。
+// Input that can already be interpreted is not changed by a single byte. If the repair does not
+// produce valid JSON, the input is returned unchanged. Never making things worse takes priority, so
+// that the caller's error message keeps pointing at the original breakage.
 //
-// 補修したかどうかを知りたい場合は、戻り値と入力を比べてください。
+// To find out whether a repair happened, compare the return value with the input.
 //
-// go-gemini-client の gemini.CleanJSONResponse が同じ問題を解いています。意図的に
-// 別実装のままです。このモジュールは engine を差し替えられるよう go.mod を go-git
-// 1 本に絞っており、Gemini 専用のクライアントを require すると呼び出し側（adk-review）の
-// モジュールグラフに載ります。片方を直したらもう片方も見てください。
-// なお salvageJSON（切り詰められた応答からの救出）はこちらにしかありません。
-// データを落とす操作で、落ちたことを呼び出し側へ伝える口（ParseInfo.Truncated）が要るためです。
+// go-gemini-client's gemini.CleanJSONResponse solves the same problem. This stays a separate
+// implementation on purpose. This module keeps go.mod down to go-git alone so the engine can be
+// swapped, and requiring a Gemini-specific client would put it in the caller's (adk-review's)
+// module graph. If you fix one, look at the other too.
+// salvageJSON (recovery from a truncated response) exists only here, though: it is an operation
+// that drops data, and it needs a way (ParseInfo.Truncated) to tell the caller that data was
+// dropped.
 func SanitizeJSON(data []byte) []byte {
 	if json.Valid(data) {
 		return data
@@ -37,11 +39,11 @@ func SanitizeJSON(data []byte) []byte {
 		return repaired
 	}
 
-	// 文字列の中の壊れたエスケープは、括弧の対応では直りません。
-	// バックスラッシュと生の制御文字を補ってからもう一度、値の切り出しを試みます。
+	// Broken escapes inside strings are not fixed by matching brackets.
+	// Fix backslashes and raw control characters, then try extracting the value again.
 	//
-	// 順序に意味があります。制御文字の補修は `\n` のようにバックスラッシュを足すので、
-	// 後から裸のバックスラッシュを探すと、足したばかりのエスケープを二重にしてしまいます。
+	// The order matters. Repairing control characters adds backslashes, as in `\n`, so looking for
+	// bare backslashes afterwards would double the escapes just added.
 	escaped := escapeControlChars(escapeLoneBackslashes(data))
 	if json.Valid(escaped) {
 		return escaped
@@ -53,11 +55,11 @@ func SanitizeJSON(data []byte) []byte {
 	return data
 }
 
-// firstJSONValue は、最初に現れる完結した JSON 値だけを取り出します。
-// 取り出せなければ nil を返します。
+// firstJSONValue extracts only the first complete JSON value.
+// It returns nil when none can be extracted.
 //
-// json.Decoder は文字列リテラルの中の括弧を正しく読み飛ばしたうえで、値が閉じた位置で
-// 止まります。前後に付いたフェンスや説明文を、括弧を数えずに落とせるのが要点です。
+// json.Decoder correctly skips brackets inside string literals and stops where the value closes.
+// The point is that surrounding fences and remarks can be dropped without counting brackets.
 func firstJSONValue(data []byte) []byte {
 	start := firstJSONStart(data)
 	if start < 0 {
@@ -71,8 +73,9 @@ func firstJSONValue(data []byte) []byte {
 	return value
 }
 
-// firstJSONStart は、最初に現れる JSON 値の開始位置を返します。
-// トップレベルが配列のスキーマにも対応するため、'{' と '[' の早い方を採ります。
+// firstJSONStart returns the start position of the first JSON value.
+// It takes whichever of '{' and '[' comes first, to also support schemas whose top level is an
+// array.
 func firstJSONStart(data []byte) int {
 	obj := strings.IndexByte(string(data), '{')
 	arr := strings.IndexByte(string(data), '[')
@@ -89,15 +92,14 @@ func firstJSONStart(data []byte) int {
 	}
 }
 
-// escapeLoneBackslashes は、文字列リテラルの中でエスケープされていない
-// バックスラッシュを二重にします。
+// escapeLoneBackslashes doubles backslashes that are not escaped inside string literals.
 //
-// JSON でバックスラッシュの後に来られるのは "\/bfnrtu だけなので、それ以外が続く `\X` は
-// モデルがエスケープし忘れた literal なバックスラッシュと一意に決まります
-// （ソースの正規表現 `\d` やパスを excerpt へ引用したときに出ます）。`\X` → `\\X` は
-// 情報を落とさず、解釈が二通りになることもありません。
+// In JSON only "\/bfnrtu may follow a backslash, so a `\X` followed by anything else is
+// unambiguously a literal backslash the model forgot to escape (it shows up when a regular
+// expression such as `\d` or a path from the source is quoted into an excerpt). `\X` → `\\X`
+// drops no information and cannot be read two ways.
 //
-// 文字列の外は触りません。JSON の構文としてバックスラッシュが現れるのは文字列の中だけです。
+// Nothing outside strings is touched. In JSON syntax backslashes appear only inside strings.
 func escapeLoneBackslashes(data []byte) []byte {
 	var b strings.Builder
 	b.Grow(len(data))
@@ -120,14 +122,14 @@ func escapeLoneBackslashes(data []byte) []byte {
 			b.WriteByte(c)
 		case '\\':
 			if i+1 < len(data) && isJSONEscape(data[i+1]) {
-				// 正しいエスケープはそのまま通します。ここで 2 バイト進めるのが要点で、
-				// `\\` を 1 バイトずつ見ると 2 つ目を裸のバックスラッシュと誤認します。
+				// Valid escapes pass through unchanged. Advancing 2 bytes here is the point:
+				// looking at `\\` one byte at a time would mistake the second for a bare backslash.
 				b.WriteByte(c)
 				b.WriteByte(data[i+1])
 				i++
 				continue
 			}
-			// 続きが無効なエスケープ（あるいは末尾）なので、literal として二重にします。
+			// What follows is not a valid escape (or this is the end), so double it as a literal.
 			b.WriteString(`\\`)
 		default:
 			b.WriteByte(c)
@@ -136,18 +138,19 @@ func escapeLoneBackslashes(data []byte) []byte {
 	return []byte(b.String())
 }
 
-// escapeControlChars は、文字列リテラルの中に生のまま置かれた制御文字を
-// エスケープ表記へ置き換えます。
+// escapeControlChars replaces control characters placed raw inside string literals with their
+// escape notation.
 //
-// JSON は文字列の中に U+0020 未満の文字をそのまま置くことを許しません。にもかかわらず
-// モデルは、複数行の引用（excerpt）やインデントを含むコードを貼るときに生の改行・タブを
-// 入れてきます。構造化出力を指定していても起こり、応答を返しきったあとの崩れなので
-// API の再試行では直りません。ここで直さないと、数分から十数分かけたレビューが
-// 「解釈できません」の一行だけを残して丸ごと失われます。
+// JSON does not allow characters below U+0020 to appear raw inside a string. Even so, the model
+// puts raw newlines and tabs in when it pastes a multi-line quote (excerpt) or indented code. It
+// happens even with structured output specified, and since the breakage comes after the response
+// has been fully returned, retrying the API call does not fix it. Without a fix here, a review that
+// took several to more than ten minutes is lost entirely, leaving only a one-line "cannot parse".
 //
-// 置き換えは一意です。生の制御文字はその位置に現れてはいけない文字なので、エスケープ表記へ
-// 写しても意味は変わらず、解釈が二通りになることもありません。文字列の外は触りません
-// （JSON の整形に使われた改行やインデントを壊さないためです）。
+// The replacement is unambiguous. A raw control character must not appear at that position, so
+// mapping it to its escape notation does not change the meaning and cannot be read two ways.
+// Nothing outside strings is touched (so as not to break the newlines and indentation used to
+// format the JSON).
 func escapeControlChars(data []byte) []byte {
 	var b strings.Builder
 	b.Grow(len(data))
@@ -169,8 +172,8 @@ func escapeControlChars(data []byte) []byte {
 			inString = false
 			b.WriteByte(c)
 		case c == '\\':
-			// 正しいエスケープは 2 バイトまとめて通します。1 バイトずつ見ると、
-			// `\"` の引用符を文字列の終わりと誤認して以降の判定がずれます。
+			// Valid escapes pass through as 2 bytes together. Looking one byte at a time would
+			// mistake the quote in `\"` for the end of the string and throw off everything after.
 			b.WriteByte(c)
 			if i+1 < len(data) && isJSONEscape(data[i+1]) {
 				b.WriteByte(data[i+1])
@@ -185,10 +188,10 @@ func escapeControlChars(data []byte) []byte {
 	return []byte(b.String())
 }
 
-// controlEscape は、制御文字に対する JSON のエスケープ表記を返します。
+// controlEscape returns the JSON escape notation for a control character.
 //
-// 短い表記があるものはそちらを使います。ログや成果物を人が読むことがあるので、
-// 改行が `\u000a` として並ぶより `\n` の方が読めます。
+// Where a short notation exists it is used. People read logs and artifacts, and `\n` reads
+// better than newlines lined up as `\u000a`.
 func controlEscape(c byte) string {
 	switch c {
 	case '\n':
@@ -206,10 +209,10 @@ func controlEscape(c byte) string {
 	}
 }
 
-// isJSONEscape は、バックスラッシュの直後に置ける文字かどうかを返します。
+// isJSONEscape reports whether c may directly follow a backslash.
 //
-// \u は続く 4 桁が 16 進である必要がありますが、そこまでは見ません。壊れた \u を
-// 直す一意な方法が無く、触ると別の壊し方をするだけだからです。
+// \u requires the following 4 digits to be hexadecimal, but that is not checked. There is no
+// unambiguous way to fix a broken \u, and touching it would only break it differently.
 func isJSONEscape(c byte) bool {
 	switch c {
 	case '"', '\\', '/', 'b', 'f', 'n', 'r', 't', 'u':
@@ -219,20 +222,21 @@ func isJSONEscape(c byte) bool {
 	}
 }
 
-// salvageJSON は、途中で切れた JSON から、完結している範囲だけを取り出します。
-// 取り出せなければ nil を返します。
+// salvageJSON extracts only the completed part of a JSON value that was cut off.
+// It returns nil when nothing can be extracted.
 //
-// ★これは補修ではなく切り捨てです。SanitizeJSON が「解釈できる入力は 1 バイトも
-// 変えない・悪化させない」を守るのに対し、こちらはデータを落とします。分けてあるのは
-// そのためで、呼び出し側が落ちたことを知らないまま完全な結果として扱えないよう、
-// ParseReport は ParseInfo.Truncated で必ず知らせます。
+// ★ This is truncation, not repair. SanitizeJSON keeps to "never change interpretable input by a
+// single byte, never make it worse", while this function drops data. That is why the two are
+// separate: so the caller cannot treat the result as complete without knowing data was dropped,
+// ParseReport always reports it through ParseInfo.Truncated.
 //
-// 出力の上限に当たったモデルは、文の途中でぷつりと止まります。そこまでに書けていた
-// 指摘は正しい JSON として並んでいるので、最後に閉じ終えた要素まで戻して、開いたままの
-// 括弧を閉じれば読めます。実測では、10.7 KiB の差分に対して 212 KB を書いた末に切れ、
-// 完成していた Blocker の指摘ごと失われた例があります。
+// A model that hits its output limit stops abruptly mid-sentence. The findings written up to that
+// point sit there as valid JSON, so going back to the last element that was closed and closing the
+// brackets still open makes it readable. In one measured case the output was cut off after writing
+// 212 KB for a 10.7 KiB diff, losing a completed Blocker finding along with it.
 //
-// 戻る先は必ず文字列の外です。壊れたエスケープや閉じていない引用符を持ち帰りません。
+// The point returned to is always outside a string. No broken escape or unclosed quote is carried
+// back.
 func salvageJSON(data []byte) []byte {
 	start := firstJSONStart(data)
 	if start < 0 {
@@ -240,8 +244,8 @@ func salvageJSON(data []byte) []byte {
 	}
 
 	var stack []byte
-	// lastSafe は、入れ子の値を閉じ終えた直後の位置です。ここまで戻れば、要素の途中でも
-	// 文字列の途中でもない地点に着きます。
+	// lastSafe is the position right after a nested value was closed. Going back to it lands at a
+	// point that is neither in the middle of an element nor in the middle of a string.
 	lastSafe := -1
 	var stackAtSafe int
 
@@ -271,7 +275,7 @@ func salvageJSON(data []byte) []byte {
 				return nil
 			}
 			stack = stack[:len(stack)-1]
-			// 一番外側が閉じたなら切れていません。救出の出番ではないので譲ります。
+			// If the outermost value closed, nothing was cut off. Salvage has no job here, so step aside.
 			if len(stack) == 0 {
 				return nil
 			}

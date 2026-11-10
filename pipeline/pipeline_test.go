@@ -23,11 +23,11 @@ func TestNewRejectsMissingDeps(t *testing.T) {
 		name   string
 		mutate func(*Deps)
 	}{
-		{"Sources が nil", func(d *Deps) { d.Sources = nil }},
-		{"Prompts が nil", func(d *Deps) { d.Prompts = nil }},
-		{"WorkspaceReviewer が nil", func(d *Deps) { d.WorkspaceReviewer = nil }},
-		{"Publisher が nil", func(d *Deps) { d.Publisher = nil }},
-		{"Notifier が nil", func(d *Deps) { d.Notifier = nil }},
+		{"nil Sources", func(d *Deps) { d.Sources = nil }},
+		{"nil Prompts", func(d *Deps) { d.Prompts = nil }},
+		{"nil WorkspaceReviewer", func(d *Deps) { d.WorkspaceReviewer = nil }},
+		{"nil Publisher", func(d *Deps) { d.Publisher = nil }},
+		{"nil Notifier", func(d *Deps) { d.Notifier = nil }},
 	}
 
 	for _, tt := range tests {
@@ -36,13 +36,13 @@ func TestNewRejectsMissingDeps(t *testing.T) {
 			tt.mutate(&deps)
 
 			if _, err := New(deps); err == nil {
-				t.Fatal("エラーを期待しましたが nil でした")
+				t.Fatal("want an error, got nil")
 			}
 		})
 	}
 
 	if _, err := New(full); err != nil {
-		t.Fatalf("完全な依存で失敗しました: %v", err)
+		t.Fatalf("failed with complete dependencies: %v", err)
 	}
 }
 
@@ -51,51 +51,51 @@ func TestRunSuccess(t *testing.T) {
 
 	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("予期しないエラー: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if result.Status != review.StatusSucceeded {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusSucceeded)
 	}
 	if !result.Published() {
-		t.Error("Published() が false です")
+		t.Error("Published() is false")
 	}
 	if !h.publisher.called {
-		t.Error("Publish が呼ばれていません")
+		t.Error("Publish was not called")
 	}
 	if !h.source.wasClosed() {
-		t.Error("差分取得元が解放されていません")
+		t.Error("the diff source was not released")
 	}
 
-	// プロンプトは差分から組み立てられ、そのままレビューへ渡ります。
+	// The prompt is built from the diff and handed to the review as-is.
 	if h.prompts.gotDiff != h.source.diff || h.prompts.gotMode != "detail" {
-		t.Errorf("プロンプト生成の入力が一致しません: mode=%q diff=%q", h.prompts.gotMode, h.prompts.gotDiff)
+		t.Errorf("prompt generation input does not match: mode=%q diff=%q", h.prompts.gotMode, h.prompts.gotDiff)
 	}
 	if h.reviewer.gotPrompt != h.prompts.prompt || h.reviewer.gotModel != "gemini-2.5-pro" {
-		t.Errorf("レビューの入力が一致しません: model=%q prompt=%q", h.reviewer.gotModel, h.reviewer.gotPrompt)
+		t.Errorf("review input does not match: model=%q prompt=%q", h.reviewer.gotModel, h.reviewer.gotPrompt)
 	}
 
 	notification := h.notifier.last(t)
 	if notification.Err != nil {
-		t.Errorf("成功時に Err が入っています: %v", notification.Err)
+		t.Errorf("Err is set on success: %v", notification.Err)
 	}
 	if notification.Report == nil {
-		t.Fatal("成功時は Report が渡されるべきです")
+		t.Fatal("a Report should be passed on success")
 	}
 	if len(notification.Report.Findings) != 1 {
-		t.Errorf("Report の中身が一致しません: %+v", notification.Report)
+		t.Errorf("Report contents do not match: %+v", notification.Report)
 	}
 }
 
-// 差分が無いのは失敗ではありません。公開は行わず、通知だけ行って
-// StatusSkipped と nil を返します。
+// No diff is not a failure. Nothing is published; only the notification goes out, and the run
+// returns StatusSkipped and nil.
 func TestRunSkipsWhenDiffIsEmpty(t *testing.T) {
 	tests := []struct {
 		name string
 		diff string
 	}{
-		{"完全に空", ""},
-		{"空白のみ", "  \n\t "},
+		{"completely empty", ""},
+		{"whitespace only", "  \n\t "},
 	}
 
 	for _, tt := range tests {
@@ -105,34 +105,34 @@ func TestRunSkipsWhenDiffIsEmpty(t *testing.T) {
 
 			result, _, err := h.pipeline.Run(context.Background(), testRequest())
 			if err != nil {
-				t.Fatalf("スキップはエラーにすべきではありません: %v", err)
+				t.Fatalf("a skip should not be an error: %v", err)
 			}
 
 			if result.Status != review.StatusSkipped {
 				t.Errorf("Status = %q, want %q", result.Status, review.StatusSkipped)
 			}
 			if result.Published() {
-				t.Error("スキップ時に Published() が true です")
+				t.Error("Published() is true on skip")
 			}
 			if h.reviewer.called {
-				t.Error("差分が無いのに AI が呼ばれています")
+				t.Error("the AI was called although there is no diff")
 			}
 			if h.publisher.called {
-				t.Error("差分が無いのに公開が行われています")
+				t.Error("published although there is no diff")
 			}
 			if h.notifier.count() != 1 {
-				t.Errorf("通知回数 = %d, want 1", h.notifier.count())
+				t.Errorf("notification count = %d, want 1", h.notifier.count())
 			}
 			if !h.source.wasClosed() {
-				t.Error("差分取得元が解放されていません")
+				t.Error("the diff source was not released")
 			}
 		})
 	}
 }
 
-// 上限を超えた差分は、AI へ送る前に失敗させます。送ってしまうと、失敗が分かるのは
-// モデルを呼び終えたあと（出力の途中切れ・締切超過）になり、いちばんコストを払った
-// あとで落ちることになります。
+// A diff over the limit fails before it is sent to the AI. Once sent, the failure is only known
+// after the model call has finished (truncated output, an exceeded deadline), failing after the
+// most cost has been paid.
 func TestRunFailsWhenDiffIsTooLarge(t *testing.T) {
 	h := newHarness(t, WithMaxDiffBytes(16))
 	h.source.diff = strings.Repeat("a", 17)
@@ -145,46 +145,46 @@ func TestRunFailsWhenDiffIsTooLarge(t *testing.T) {
 		t.Errorf("StepOf(err) = %q, want %q", step, review.StepDiff)
 	}
 	if report != nil {
-		t.Error("レビューしていないのに Report が返っています")
+		t.Error("a Report was returned without a review")
 	}
 	if result.Status != review.StatusFailed {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
 	}
 
-	// 上限は「送る前に落とす」ためのものなので、プロンプト生成にも到達しません。
+	// The limit exists to "stop before sending", so prompt generation is not reached either.
 	if h.prompts.gotDiff != "" {
-		t.Error("上限を超えたのにプロンプトが組み立てられています")
+		t.Error("the prompt was built although the limit was exceeded")
 	}
 	if h.reviewer.called {
-		t.Error("上限を超えたのに AI が呼ばれています")
+		t.Error("the AI was called although the limit was exceeded")
 	}
 	if h.publisher.called {
-		t.Error("上限を超えたのに公開が行われています")
+		t.Error("published although the limit was exceeded")
 	}
 	if !h.source.wasClosed() {
-		t.Error("差分取得元が解放されていません")
+		t.Error("the diff source was not released")
 	}
 
-	// スキップではなく失敗なので、通知にはエラーが載ります。載らないと利用者は
-	// 範囲を絞るという手を打てません。
+	// It is a failure, not a skip, so the notification carries the error. Without it the user
+	// cannot act by narrowing the range.
 	if n := h.notifier.count(); n != 1 {
-		t.Fatalf("通知回数 = %d, want 1", n)
+		t.Fatalf("notification count = %d, want 1", n)
 	}
 	if last := h.notifier.last(t); !errors.Is(last.Err, review.ErrDiffTooLarge) {
-		t.Errorf("通知の Err = %v, want review.ErrDiffTooLarge", last.Err)
+		t.Errorf("notification Err = %v, want review.ErrDiffTooLarge", last.Err)
 	}
 }
 
-// 上限ちょうどは通します。境界を外すと、上限を実測から決めた利用側で
-// 「その値ちょうどの差分だけが理由もなく落ちる」という形になります。
+// A diff exactly at the limit passes. Getting the boundary wrong would, for a consumer that set the
+// limit from measurements, mean "only a diff of exactly that size fails for no reason".
 func TestMaxDiffBytesBoundary(t *testing.T) {
 	tests := []struct {
 		name    string
 		size    int
 		wantErr bool
 	}{
-		{"上限ちょうど", 16, false},
-		{"1 バイト超過", 17, true},
+		{"exactly at the limit", 16, false},
+		{"1 byte over", 17, true},
 	}
 
 	for _, tt := range tests {
@@ -203,26 +203,26 @@ func TestMaxDiffBytesBoundary(t *testing.T) {
 	}
 }
 
-// 既定は無制限です。上限を持つかどうかは利用側の判断なので、ライブラリが勝手に
-// 数字を決めると、設定していない呼び出し側の挙動が黙って変わります。
+// The default is unlimited. Whether to have a limit is the consumer's decision; if the library
+// picked a number on its own, callers that set nothing would silently change behaviour.
 func TestMaxDiffBytesDefaultsToUnlimited(t *testing.T) {
 	h := newHarness(t)
 	if h.pipeline.maxDiffBytes != 0 {
-		t.Errorf("maxDiffBytes = %d, want 0（無制限）", h.pipeline.maxDiffBytes)
+		t.Errorf("maxDiffBytes = %d, want 0 (unlimited)", h.pipeline.maxDiffBytes)
 	}
 
 	h.source.diff = strings.Repeat("a", 1<<20)
 	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
-		t.Fatalf("未設定なら大きさで落ちてはいけません: %v", err)
+		t.Fatalf("must not fail on size when unset: %v", err)
 	}
 }
 
-// 0 以下は無視されること（WithRunTimeout / WithPublishTimeout と同じ規則）。
+// Values of 0 or less are ignored (the same rule as WithRunTimeout / WithPublishTimeout).
 func TestMaxDiffBytesIgnoresNonPositive(t *testing.T) {
 	for _, n := range []int{0, -1} {
 		h := newHarness(t, WithMaxDiffBytes(n))
 		if h.pipeline.maxDiffBytes != 0 {
-			t.Errorf("WithMaxDiffBytes(%d) で maxDiffBytes = %d, want 0", n, h.pipeline.maxDiffBytes)
+			t.Errorf("WithMaxDiffBytes(%d) gives maxDiffBytes = %d, want 0", n, h.pipeline.maxDiffBytes)
 		}
 	}
 }
@@ -235,32 +235,32 @@ func TestRunFailures(t *testing.T) {
 		wantPublish bool
 	}{
 		{
-			name:     "リポジトリの準備に失敗",
+			name:     "prepare fails",
 			arrange:  func(h *harness) { h.factory.openErr = errBoom },
 			wantStep: review.StepPrepare,
 		},
 		{
-			name:     "差分取得に失敗",
+			name:     "diff fails",
 			arrange:  func(h *harness) { h.source.diffErr = errBoom },
 			wantStep: review.StepDiff,
 		},
 		{
-			name:     "プロンプト生成に失敗",
+			name:     "prompt generation fails",
 			arrange:  func(h *harness) { h.prompts.err = errBoom },
 			wantStep: review.StepPrompt,
 		},
 		{
-			name:     "Headチェックアウトに失敗",
+			name:     "head checkout fails",
 			arrange:  func(h *harness) { h.source.checkoutErr = errBoom },
 			wantStep: review.StepCheckout,
 		},
 		{
-			name:     "AIレビューに失敗",
+			name:     "AI review fails",
 			arrange:  func(h *harness) { h.reviewer.err = errBoom },
 			wantStep: review.StepReview,
 		},
 		{
-			name:        "公開に失敗",
+			name:        "publish fails",
 			arrange:     func(h *harness) { h.publisher.err = errBoom },
 			wantStep:    review.StepPublish,
 			wantPublish: true,
@@ -274,28 +274,28 @@ func TestRunFailures(t *testing.T) {
 
 			result, _, err := h.pipeline.Run(context.Background(), testRequest())
 			if err == nil {
-				t.Fatal("エラーを期待しましたが nil でした")
+				t.Fatal("want an error, got nil")
 			}
 			if !errors.Is(err, errBoom) {
-				t.Fatalf("原因まで辿れません: %v", err)
+				t.Fatalf("cannot reach the cause: %v", err)
 			}
 			if got := review.StepOf(err); got != tt.wantStep {
-				t.Errorf("工程名 = %q, want %q", got, tt.wantStep)
+				t.Errorf("step name = %q, want %q", got, tt.wantStep)
 			}
 			if result.Status != review.StatusFailed {
 				t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
 			}
 			if h.publisher.called != tt.wantPublish {
-				t.Errorf("Publish の呼び出し = %v, want %v", h.publisher.called, tt.wantPublish)
+				t.Errorf("Publish called = %v, want %v", h.publisher.called, tt.wantPublish)
 			}
 
-			// 失敗した場合こそ通知が必要です。
+			// A failure is exactly when a notification is needed.
 			notification := h.notifier.last(t)
 			if notification.Err == nil {
-				t.Error("通知に原因が渡されていません")
+				t.Error("the cause was not passed to the notification")
 			}
 			if notification.Result.Status != review.StatusFailed {
-				t.Errorf("通知の Status = %q", notification.Result.Status)
+				t.Errorf("notification Status = %q", notification.Result.Status)
 			}
 		})
 	}
@@ -309,69 +309,70 @@ func TestRunRejectsInvalidRequest(t *testing.T) {
 
 	result, _, err := h.pipeline.Run(context.Background(), req)
 	if !errors.Is(err, review.ErrInvalidRequest) {
-		t.Fatalf("ErrInvalidRequest を期待しましたが: %v", err)
+		t.Fatalf("want ErrInvalidRequest, got: %v", err)
 	}
 	if got := review.StepOf(err); got != review.StepValidate {
-		t.Errorf("工程名 = %q, want %q", got, review.StepValidate)
+		t.Errorf("step name = %q, want %q", got, review.StepValidate)
 	}
 	if result.Status != review.StatusFailed {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
 	}
-	// 検証で弾いた時点でリポジトリには触れません。
+	// Once rejected by validation, the repository is not touched.
 	if h.source.wasClosed() {
-		t.Error("準備していない差分取得元が解放されています")
+		t.Error("a diff source that was never prepared was released")
 	}
 	if h.notifier.count() != 1 {
-		t.Errorf("通知回数 = %d, want 1", h.notifier.count())
+		t.Errorf("notification count = %d, want 1", h.notifier.count())
 	}
 }
 
-// 公開・通知・後始末は呼び出し元の締切から切り離します。レビューが締切で打ち切られた
-// 直後こそ通知が必要なのに、期限切れの context を引き継ぐと通知まで道連れで失敗するためです。
+// Publishing, notification and cleanup are detached from the caller's deadline. Right after a
+// review is cut off by its deadline is exactly when a notification is needed, and inheriting the
+// expired context would take the notification down with it.
 func TestRunDetachesPublishFromCallerDeadline(t *testing.T) {
 	h := newHarness(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // 呼び出し元は既に打ち切られている
+	cancel() // the caller has already been cut off
 
 	result, _, err := h.pipeline.Run(ctx, testRequest())
 	if err != nil {
-		t.Fatalf("予期しないエラー: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Status != review.StatusSucceeded {
 		t.Fatalf("Status = %q", result.Status)
 	}
 
 	if h.publisher.ctxErr != nil {
-		t.Errorf("公開に期限切れの context が渡されています: %v", h.publisher.ctxErr)
+		t.Errorf("publishing was given an expired context: %v", h.publisher.ctxErr)
 	}
 	if h.notifier.ctxErr != nil {
-		t.Errorf("通知に期限切れの context が渡されています: %v", h.notifier.ctxErr)
+		t.Errorf("the notification was given an expired context: %v", h.notifier.ctxErr)
 	}
 }
 
-// 通知の失敗はパイプライン全体の失敗にしません。成果物は既に保存済みだからです。
+// A notification failure does not fail the whole pipeline, because the artifact is already stored.
 func TestRunIgnoresNotifierFailure(t *testing.T) {
 	h := newHarness(t)
 	h.notifier.err = errBoom
 
 	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("通知の失敗で全体が失敗しています: %v", err)
+		t.Fatalf("the whole run failed because of a notification failure: %v", err)
 	}
 	if result.Status != review.StatusSucceeded {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusSucceeded)
 	}
 }
 
-// 後始末の失敗も同様に、レビュー結果を捨てる理由にはしません。
+// Likewise, a cleanup failure is no reason to discard the review result.
 func TestRunIgnoresCloseFailure(t *testing.T) {
 	h := newHarness(t)
 	h.source.closeErr = errBoom
 
 	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("後始末の失敗で全体が失敗しています: %v", err)
+		t.Fatalf("the whole run failed because of a cleanup failure: %v", err)
 	}
 	if result.Status != review.StatusSucceeded {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusSucceeded)
@@ -383,21 +384,21 @@ func TestRunRecordsDuration(t *testing.T) {
 
 	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("予期しないエラー: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if result.Duration <= 0 {
-		t.Fatalf("Duration = %v, want 正の値", result.Duration)
+		t.Fatalf("Duration = %v, want a positive value", result.Duration)
 	}
 }
 
 func TestOptions(t *testing.T) {
-	t.Run("既定値", func(t *testing.T) {
+	t.Run("defaults", func(t *testing.T) {
 		h := newHarness(t)
 		if h.pipeline.publishTimeout != DefaultPublishTimeout {
 			t.Errorf("publishTimeout = %v, want %v", h.pipeline.publishTimeout, DefaultPublishTimeout)
 		}
 		if h.pipeline.logger == nil {
-			t.Error("logger が nil です")
+			t.Error("logger is nil")
 		}
 	})
 
@@ -408,46 +409,46 @@ func TestOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("不正な値は無視される", func(t *testing.T) {
+	t.Run("invalid values are ignored", func(t *testing.T) {
 		h := newHarness(t, WithPublishTimeout(0), WithLogger(nil))
 		if h.pipeline.publishTimeout != DefaultPublishTimeout {
 			t.Errorf("publishTimeout = %v, want %v", h.pipeline.publishTimeout, DefaultPublishTimeout)
 		}
 		if h.pipeline.logger == nil {
-			t.Error("nil ロガーで上書きされています")
+			t.Error("overwritten by a nil logger")
 		}
 	})
 }
 
-// Run は Report も返します。レビューの中身を必要とする処理（ジョブ状態の記録など）が、
-// 通知フックへ相乗りせずに済むようにするためです。
+// Run also returns the Report, so that work needing the review's contents (recording job state,
+// say) does not have to ride on the notification hook.
 func TestRunReturnsReport(t *testing.T) {
 	h := newHarness(t)
 
 	_, report, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("予期しないエラー: %v", err)
+		t.Fatalf("unexpected error: %v", err)
 	}
 	if report == nil {
-		t.Fatal("成功時は Report が返るべきです")
+		t.Fatal("a Report should be returned on success")
 	}
 	if report.Title != testReport().Title {
 		t.Errorf("Title = %q, want %q", report.Title, testReport().Title)
 	}
 	if len(report.Findings) != 1 {
-		t.Errorf("findings 件数 = %d, want 1", len(report.Findings))
+		t.Errorf("findings count = %d, want 1", len(report.Findings))
 	}
 }
 
-// レビューへ到達しなかった場合は Report が nil です。
+// The Report is nil when the run did not reach the review.
 func TestRunReturnsNilReportWithoutReview(t *testing.T) {
 	tests := []struct {
 		name    string
 		arrange func(*harness)
 	}{
-		{"差分なし", func(h *harness) { h.source.diff = "" }},
-		{"準備に失敗", func(h *harness) { h.factory.openErr = errBoom }},
-		{"AIレビューに失敗", func(h *harness) { h.reviewer.err = errBoom }},
+		{"no diff", func(h *harness) { h.source.diff = "" }},
+		{"prepare fails", func(h *harness) { h.factory.openErr = errBoom }},
+		{"AI review fails", func(h *harness) { h.reviewer.err = errBoom }},
 	}
 
 	for _, tt := range tests {
@@ -457,31 +458,31 @@ func TestRunReturnsNilReportWithoutReview(t *testing.T) {
 
 			_, report, _ := h.pipeline.Run(context.Background(), testRequest())
 			if report != nil {
-				t.Fatalf("Report は nil であるべきです: %+v", report)
+				t.Fatalf("the Report should be nil: %+v", report)
 			}
 		})
 	}
 }
 
-// 保存に失敗した場合はレビュー自体は成立しているため、Report とエラーの両方が返ります。
-// 呼び出し側が「レビューはできたが残せなかった」を区別できます。
+// When storing fails, the review itself succeeded, so both the Report and an error are returned.
+// The caller can tell "reviewed, but could not keep it".
 func TestRunReturnsReportWhenPublishFails(t *testing.T) {
 	h := newHarness(t)
 	h.publisher.err = errBoom
 
 	_, report, err := h.pipeline.Run(context.Background(), testRequest())
 	if err == nil {
-		t.Fatal("エラーを期待しましたが nil でした")
+		t.Fatal("want an error, got nil")
 	}
 	if report == nil {
-		t.Fatal("レビューは成立しているため Report が返るべきです")
+		t.Fatal("the review succeeded, so a Report should be returned")
 	}
 	if report.Title != testReport().Title {
 		t.Errorf("Title = %q", report.Title)
 	}
 }
 
-// 検証で弾いた場合も Report は nil です。
+// The Report is nil when validation rejects the request too.
 func TestRunReturnsNilReportForInvalidRequest(t *testing.T) {
 	h := newHarness(t)
 
@@ -490,14 +491,14 @@ func TestRunReturnsNilReportForInvalidRequest(t *testing.T) {
 
 	_, report, err := h.pipeline.Run(context.Background(), req)
 	if err == nil {
-		t.Fatal("エラーを期待しましたが nil でした")
+		t.Fatal("want an error, got nil")
 	}
 	if report != nil {
-		t.Fatalf("Report は nil であるべきです: %+v", report)
+		t.Fatalf("the Report should be nil: %+v", report)
 	}
 }
 
-// slowReviewer は、context がキャンセルされるまで待つ review.WorkspaceReviewer です。
+// slowReviewer is a review.WorkspaceReviewer that waits until its context is cancelled.
 type slowReviewer struct {
 	sawDeadline bool
 	hadDeadline bool
@@ -512,11 +513,11 @@ func (s *slowReviewer) Review(
 	return review.Report{}, review.RunInfo{}, ctx.Err()
 }
 
-// WithRunTimeout がレビュー本体にだけ締切を掛けること。
+// WithRunTimeout puts a deadline on the review itself only.
 //
-// 呼び出し側が Run へ渡す context に自分で締切を被せると、打ち切られた直後は
-// context が期限切れなので、失敗を報告する通知まで道連れになります。
-// ★ この上限を使えば、打ち切られても通知は届きます。
+// If the caller put its own deadline on the context passed to Run, the context would have expired
+// right after the cutoff, taking the failure notification down with it.
+// ★ With this limit, the notification arrives even after a cutoff.
 func TestRunTimeoutBoundsReviewButNotNotify(t *testing.T) {
 	t.Parallel()
 
@@ -527,55 +528,55 @@ func TestRunTimeoutBoundsReviewButNotNotify(t *testing.T) {
 	result, report, err := h.pipeline.Run(context.Background(), testRequest())
 
 	if err == nil {
-		t.Fatal("締切で打ち切られていません")
+		t.Fatal("not cut off by the deadline")
 	}
 	if !slow.hadDeadline {
-		t.Error("レビュアーへ渡った context に締切がありません")
+		t.Error("the context passed to the reviewer has no deadline")
 	}
 	if report != nil {
-		t.Errorf("打ち切り時に report が返っています: %+v", report)
+		t.Errorf("a report was returned on cutoff: %+v", report)
 	}
 	if result.Status != review.StatusFailed {
 		t.Errorf("Status = %q, want %q", result.Status, review.StatusFailed)
 	}
-	// ここが要点です。締切に巻き込まれず通知まで届くこと。
+	// This is the point: the notification arrives without being caught up in the deadline.
 	if got := h.notifier.count(); got != 1 {
-		t.Fatalf("通知回数 = %d, want 1（打ち切りでも失敗通知は届くべきです）", got)
+		t.Fatalf("notification count = %d, want 1 (the failure notification should arrive even on cutoff)", got)
 	}
 }
 
-// 既定は無制限であること。既存の利用者の挙動を変えないための確認です。
+// The default is unlimited. This checks that existing users' behaviour does not change.
 func TestRunTimeoutDefaultsToUnlimited(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	if h.pipeline.runTimeout != 0 {
-		t.Errorf("runTimeout = %v, want 0（無制限）", h.pipeline.runTimeout)
+		t.Errorf("runTimeout = %v, want 0 (unlimited)", h.pipeline.runTimeout)
 	}
 
 	probe := &deadlineProbe{report: testReport()}
 	h.pipeline.deps.WorkspaceReviewer = probe
 	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
-		t.Fatalf("Run が失敗しました: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if probe.hadDeadline {
-		t.Error("未設定なのにレビュアーの context へ締切が付いています")
+		t.Error("the reviewer's context has a deadline although none was set")
 	}
 }
 
-// 0 以下は無視されること（WithPublishTimeout と同じ規則）。
+// Values of 0 or less are ignored (the same rule as WithPublishTimeout).
 func TestRunTimeoutIgnoresNonPositive(t *testing.T) {
 	t.Parallel()
 
 	for _, d := range []time.Duration{0, -time.Second} {
 		h := newHarness(t, WithRunTimeout(d))
 		if h.pipeline.runTimeout != 0 {
-			t.Errorf("WithRunTimeout(%v) で runTimeout = %v, want 0", d, h.pipeline.runTimeout)
+			t.Errorf("WithRunTimeout(%v) gives runTimeout = %v, want 0", d, h.pipeline.runTimeout)
 		}
 	}
 }
 
-// deadlineProbe は、渡された context に締切があるかだけを見る review.WorkspaceReviewer です。
+// deadlineProbe is a review.WorkspaceReviewer that only checks whether its context has a deadline.
 type deadlineProbe struct {
 	report      review.Report
 	hadDeadline bool
@@ -588,7 +589,7 @@ func (d *deadlineProbe) Review(
 	return d.report, review.RunInfo{}, nil
 }
 
-// slowPublisher は、context が切れるまで粘って失敗する review.Publisher です。
+// slowPublisher is a review.Publisher that holds on until its context expires and then fails.
 type slowPublisher struct{}
 
 func (slowPublisher) Publish(ctx context.Context, _ review.Request, _ review.Report) error {
@@ -596,11 +597,11 @@ func (slowPublisher) Publish(ctx context.Context, _ review.Request, _ review.Rep
 	return ctx.Err()
 }
 
-// ★ 公開が予算を使い切って失敗しても、失敗通知は届くこと。
+// ★ Even when publishing uses up its budget and fails, the failure notification arrives.
 //
-// 公開に渡した context をそのまま通知へ回すと、既に期限切れなので通知は必ず失敗します。
-// 「いちばん報告が必要な場面でだけ届かない」という裏返った挙動になるため、
-// 通知には別の予算を与えます。
+// Handing the context given to publishing on to the notification, it has already expired, so the
+// notification always fails. That is the inverted behaviour of "it fails to arrive only when a
+// report is needed most", so the notification gets a separate budget.
 func TestPublishTimeoutDoesNotStarveFailureNotify(t *testing.T) {
 	t.Parallel()
 
@@ -609,22 +610,22 @@ func TestPublishTimeoutDoesNotStarveFailureNotify(t *testing.T) {
 
 	_, report, err := h.pipeline.Run(context.Background(), testRequest())
 	if err == nil {
-		t.Fatal("公開の失敗が返っていません")
+		t.Fatal("the publish failure was not returned")
 	}
-	// レビュー自体は成立しているので Report は返ります。
+	// The review itself succeeded, so the Report is returned.
 	if report == nil {
-		t.Error("公開に失敗しても Report は返すべきです")
+		t.Error("the Report should be returned even when publishing fails")
 	}
 
 	if got := h.notifier.count(); got != 1 {
-		t.Fatalf("通知回数 = %d, want 1", got)
+		t.Fatalf("notification count = %d, want 1", got)
 	}
 	if h.notifier.ctxErr != nil {
-		t.Errorf("通知が期限切れの context で行われています: %v", h.notifier.ctxErr)
+		t.Errorf("the notification ran on an expired context: %v", h.notifier.ctxErr)
 	}
 }
 
-// 成功時も、通知が公開と予算を食い合わないこと。
+// On success too, the notification does not share its budget with publishing.
 func TestPublishAndNotifyGetSeparateBudgets(t *testing.T) {
 	t.Parallel()
 
@@ -632,19 +633,19 @@ func TestPublishAndNotifyGetSeparateBudgets(t *testing.T) {
 	h.pipeline.deps.Publisher = sleepyPublisher{d: 30 * time.Millisecond}
 
 	if _, _, err := h.pipeline.Run(context.Background(), testRequest()); err != nil {
-		t.Fatalf("Run が失敗しました: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if h.notifier.ctxErr != nil {
-		t.Errorf("通知の context が公開に削られています: %v", h.notifier.ctxErr)
+		t.Errorf("the notification's context was eaten into by publishing: %v", h.notifier.ctxErr)
 	}
 
-	// 通知に渡った締切が、公開で消費したぶんだけ短くなっていないこと。
+	// The deadline passed to the notification is not shortened by the time publishing used.
 	if remaining := h.notifier.remaining; remaining < 40*time.Millisecond {
-		t.Errorf("通知の残り時間 = %v, 公開と予算を共有しています", remaining)
+		t.Errorf("notification time left = %v, sharing its budget with publishing", remaining)
 	}
 }
 
-// sleepyPublisher は、一定時間かけてから成功する review.Publisher です。
+// sleepyPublisher is a review.Publisher that succeeds after taking a fixed time.
 type sleepyPublisher struct{ d time.Duration }
 
 func (s sleepyPublisher) Publish(ctx context.Context, _ review.Request, _ review.Report) error {
@@ -656,17 +657,17 @@ func (s sleepyPublisher) Publish(ctx context.Context, _ review.Request, _ review
 	}
 }
 
-// nilSources は、生成に失敗した実装（typed-nil）を模した型です。
+// nilSources mimics an implementation whose construction failed (a typed nil).
 type nilSources struct{}
 
 func (*nilSources) Open(context.Context, review.Request) (review.DiffSource, error) {
 	return nil, nil
 }
 
-// 生成に失敗した実装（nil ポインタ）を渡されたら、起動時に落とすこと。
+// An implementation whose construction failed (a nil pointer) fails at startup.
 //
-// 素の == nil では typed-nil を見逃し、検証を通過したあと最初に呼んだ時点で
-// nil ポインタ参照になります。依存の検証は起動時に落とすためにあります。
+// A plain == nil misses a typed nil, which passes validation and then becomes a nil pointer
+// dereference on its first call. Dependency validation exists to fail at startup.
 func TestValidateRejectsTypedNilDependency(t *testing.T) {
 	t.Parallel()
 
@@ -676,16 +677,16 @@ func TestValidateRejectsTypedNilDependency(t *testing.T) {
 
 	_, err := New(deps)
 	if err == nil {
-		t.Fatal("typed-nil の依存が素通りしました")
+		t.Fatal("a typed-nil dependency slipped through")
 	}
 	if !strings.Contains(err.Error(), "Sources") {
-		t.Errorf("エラーに項目名がありません: %v", err)
+		t.Errorf("the error does not name the field: %v", err)
 	}
 }
 
-// typed-nil のレビュアーは未設定として弾くこと。
+// A typed-nil reviewer is rejected as unset.
 //
-// 素の == nil では見逃すため、通すと最初に呼んだ時点で nil ポインタ参照になります。
+// A plain == nil misses it, and letting it through means a nil pointer dereference on the first call.
 func TestValidateTreatsTypedNilReviewerAsUnset(t *testing.T) {
 	t.Parallel()
 
@@ -695,27 +696,28 @@ func TestValidateTreatsTypedNilReviewerAsUnset(t *testing.T) {
 
 	_, err := New(deps)
 	if err == nil {
-		t.Fatal("typed-nil のレビュアーが素通りしました")
+		t.Fatal("a typed-nil reviewer slipped through")
 	}
 	if !strings.Contains(err.Error(), "WorkspaceReviewer") {
-		t.Errorf("エラーに項目名がありません: %v", err)
+		t.Errorf("the error does not name the field: %v", err)
 	}
 }
 
-// nil の Option を渡してもパニックしないこと。
+// Passing a nil Option does not panic.
 func TestNewIgnoresNilOption(t *testing.T) {
 	t.Parallel()
 
 	h := newHarness(t)
 	if _, err := New(h.pipeline.deps, nil, WithPublishTimeout(time.Second), nil); err != nil {
-		t.Fatalf("nil Option でエラーになりました: %v", err)
+		t.Fatalf("a nil Option caused an error: %v", err)
 	}
 }
 
-// ★ 計測値は失敗した実行でも残ること。
+// ★ Measurements survive even for failed runs.
 //
-// 上限が厳しすぎるかどうかを判断する材料は、通った実行より弾かれた実行の側にあります。
-// 成功したときだけ数字が残る作りだと、分布の裾がいちばん見たいときに欠けます。
+// The material for judging whether a limit is too strict lies with the runs that were rejected,
+// not with the ones that passed. If numbers survived only on success, the tail of the distribution
+// would be missing exactly when you most want to see it.
 func TestRunCarriesStatsIntoResult(t *testing.T) {
 	t.Parallel()
 
@@ -732,9 +734,9 @@ func TestRunCarriesStatsIntoResult(t *testing.T) {
 		arrange func(*harness)
 		want    review.Status
 	}{
-		{"成功", func(*harness) {}, review.StatusSucceeded},
-		{"AIレビューに失敗", func(h *harness) { h.reviewer.err = errBoom }, review.StatusFailed},
-		{"公開に失敗", func(h *harness) { h.publisher.err = errBoom }, review.StatusFailed},
+		{"success", func(*harness) {}, review.StatusSucceeded},
+		{"AI review fails", func(h *harness) { h.reviewer.err = errBoom }, review.StatusFailed},
+		{"publish fails", func(h *harness) { h.publisher.err = errBoom }, review.StatusFailed},
 	}
 
 	for _, tt := range tests {
@@ -758,8 +760,8 @@ func TestRunCarriesStatsIntoResult(t *testing.T) {
 	}
 }
 
-// レビューへ到達しなかった実行でも、差分の大きさまでは残ること。
-// 上限に弾かれた実行こそ、どのくらい超えていたのかを後から見たい対象です。
+// Even a run that did not reach the review keeps the diff size.
+// A run rejected by the limit is exactly the one where you later want to see how far over it was.
 func TestRunRecordsDiffBytesWhenRejected(t *testing.T) {
 	t.Parallel()
 
@@ -774,11 +776,11 @@ func TestRunRecordsDiffBytesWhenRejected(t *testing.T) {
 		t.Errorf("DiffBytes = %d, want 17", result.DiffBytes)
 	}
 	if result.Run != (review.RunInfo{}) {
-		t.Errorf("レビューしていないのに Run = %+v", result.Run)
+		t.Errorf("Run = %+v without a review", result.Run)
 	}
 }
 
-// 差分が無い実行では、どちらもゼロ値であること。
+// A run with no diff leaves both at the zero value.
 func TestRunLeavesStatsEmptyWhenSkipped(t *testing.T) {
 	t.Parallel()
 
@@ -787,9 +789,9 @@ func TestRunLeavesStatsEmptyWhenSkipped(t *testing.T) {
 
 	result, _, err := h.pipeline.Run(context.Background(), testRequest())
 	if err != nil {
-		t.Fatalf("Run が失敗しました: %v", err)
+		t.Fatalf("Run failed: %v", err)
 	}
 	if result.DiffBytes != 0 || result.Run != (review.RunInfo{}) {
-		t.Errorf("スキップなのに DiffBytes = %d, Run = %+v", result.DiffBytes, result.Run)
+		t.Errorf("DiffBytes = %d, Run = %+v on skip", result.DiffBytes, result.Run)
 	}
 }

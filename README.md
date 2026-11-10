@@ -8,64 +8,71 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/go-review-kit.svg)](https://pkg.go.dev/github.com/shouni/go-review-kit)
 
-## 🚀 概要 (About) - 差分を取り、AI に読ませ、保存して、通知する。AI SDK は持たない
+English | [日本語](README.ja.md)
 
-**Go Review Kit** は、「Git の差分を取る → AI にレビューさせる → 結果を保存する → 通知する」を
-1 本のパイプラインとして提供するライブラリです。`main` パッケージは持ちません。
+## 🚀 About - Take the diff, have an AI read it, store it, notify. No AI SDK included
 
-レビュー結果は型付きの `review.Report`（判定・重大度付きの指摘）として受け渡し、`ParseReport` が
-解釈と検証を引き受けます。AI SDK には依存しないため、コードに限らず Markdown 原稿のレビューなど、
-実装次第で用途を変えられます。
+**Go Review Kit** is a library that provides "take a Git diff → have an AI review it → store the
+result → notify" as a single pipeline. It has no `main` package.
 
-### 扱わないこと
+The review result is passed around as a typed `review.Report` (a verdict plus findings with
+severities), and `ParseReport` takes care of interpreting and validating it. Since it does not
+depend on any AI SDK, its use can change with the implementation — reviewing Markdown manuscripts,
+for example, not only code.
 
-**レビュアー・プロンプトの文面・保存先・通知先は、いずれも呼び出し側の実装です。**
-どの AI SDK でレビューするか（`review.WorkspaceReviewer`）、どんな文面で指示するか
-（`review.PromptGenerator`）、JSON で残すのか HTML に整形して GCS / S3 / DB のどこへ置くのか
-（`review.Publisher`）、どこへ知らせるか（`review.Notifier`）は、いずれも表示や運用の作りに
-従属する決定です。ライブラリ側に既定を持たせると、全利用者が要らないレンダリングと依存を
-抱えることになります。直接依存は `go-git` だけです。
+### Out of scope
 
----
-
-## ✨ 提供機能 (Features)
-
-* **参照はブランチに限りません** — タグやコミットハッシュも直接指定できます。解決は常に
-  「リモートブランチ → コミット」の順なので、数字だけのブランチ名（チケット番号など）が
-  短縮ハッシュとして解決され、意図しないコミットの差分を取ってしまうことがありません。
-* **3 点比較** — マージベースを起点にするため、base 側で進んだコミットが差分に混ざりません。
-* **上限を実測から決められます** — `Result` に差分の大きさ・所要時間・モデルの使用量・ツール
-  呼び出し回数が載ります。**失敗した実行でも埋まります。** 上限が厳しすぎるかどうかを判断する
-  材料は、通った実行より弾かれた実行の側にあるためです。
-* **レビュアーはエージェント型** — `WorkspaceReviewer` は Head をチェックアウトした作業ディレクトリを
-  自分で調べられます。差分の外を確認できることが前提なので、「ファイルを開いて確かめろ」
-  「確認した根拠を挙げろ」と書いたプロンプトが常に成立します。
-* **モデルが混ぜたノイズを吸収します** — 構造化出力を指定しても、モデルは Markdown のフェンス、
-  末尾の説明文、エスケープし忘れたバックスラッシュ、生の改行を混ぜることがあります。
-  **応答を返しきったあとの崩れなので API の再試行では直りません。** `ParseReport` は、そのまま
-  解釈できたときは何もせず、失敗したときだけ補修を試します。
+**The reviewer, the prompt wording, the storage target and the notification target are all the
+caller's implementation.** Which AI SDK reviews (`review.WorkspaceReviewer`), what wording instructs
+it (`review.PromptGenerator`), whether the result is kept as JSON or rendered to HTML and placed in
+GCS / S3 / a DB (`review.Publisher`), and where it is announced (`review.Notifier`) are all
+decisions that follow from how the display and operations are built. Giving the library defaults
+for them would make every consumer carry rendering and dependencies it does not need. The only
+direct dependency is `go-git`.
 
 ---
 
-## 📦 パッケージ構成 (Package Structure)
+## ✨ Features
 
-| カテゴリ | パッケージ | 役割と責務 |
+* **Refs are not limited to branches** — tags and commit hashes can be given directly. Resolution
+  always goes "remote branch → commit", so a digits-only branch name (a ticket number, say) is
+  never resolved as an abbreviated hash, which would take the diff of an unintended commit.
+* **Three-dot comparison** — the merge base is the starting point, so commits that advanced on the
+  base side do not mix into the diff.
+* **Limits can be set from measurements** — `Result` carries the diff size, the duration, the
+  model's usage and the number of tool calls. **It is filled even for failed runs.** The material
+  for judging whether a limit is too strict lies with the runs that were rejected, not with the
+  ones that passed.
+* **The reviewer is agentic** — a `WorkspaceReviewer` can inspect the working directory with Head
+  checked out by itself. Being able to look beyond the diff is a given, so a prompt saying "open the
+  file and confirm it" or "cite what you checked as evidence" always holds.
+* **Absorbs the noise the model mixes in** — even with structured output specified, the model may
+  mix in Markdown fences, trailing remarks, backslashes it forgot to escape, and raw newlines.
+  **The breakage happens after the response has been fully returned, so retrying the API call does
+  not fix it.** `ParseReport` does nothing when the output parses as-is, and tries a repair only
+  when it fails.
+
+---
+
+## 📦 Package Structure
+
+| Category | Package | Role and responsibility |
 | :--- | :--- | :--- |
-| **契約** | **`review`** | ドメイン型・番兵エラー・全ポートの定義。他のどのパッケージにも依存しません |
-| **実行** | **`pipeline`** | 準備 → 差分 → プロンプト → Head チェックアウト → AI → 保存 → 通知 を制御し、結果を返します |
-| **実装** | **`git`** | `review.DiffSource` の実体。`GoGit`（純 Go・使い捨て環境向き）と `CLI`（`git` バイナリを使い、チェックアウトを再利用できる環境向き） |
+| **Contract** | **`review`** | Defines the domain types, sentinel errors and every port. Depends on no other package |
+| **Execution** | **`pipeline`** | Drives prepare → diff → prompt → Head checkout → AI → store → notify, and returns the result |
+| **Implementation** | **`git`** | The concrete `review.DiffSource`: `GoGit` (pure Go, suited to throwaway environments) and `CLI` (uses the `git` binary, suited to environments that can reuse a checkout) |
 
-`git` のどちらを使うかは呼び出し側が選びます（本ライブラリは選択しません）。各型・ポート・
-オプションの詳細は [pkg.go.dev](https://pkg.go.dev/github.com/shouni/go-review-kit) にあります。
+The caller chooses which `git` implementation to use (this library does not choose). Details of
+each type, port and option are on [pkg.go.dev](https://pkg.go.dev/github.com/shouni/go-review-kit).
 
 ---
 
-## 🚦 使い方 (Usage)
+## 🚦 Usage
 
-`pipeline.Deps` に実装を差し込んで `Run` を呼びます。
+Plug your implementations into `pipeline.Deps` and call `Run`.
 
 ```go
-// reviewer / publisher / notifier / prompts は呼び出し側の実装です。
+// reviewer / publisher / notifier / prompts are the caller's implementations.
 func run(
 	ctx context.Context,
 	reviewer review.WorkspaceReviewer,
@@ -90,48 +97,50 @@ func run(
 	}
 
 	result, report, err := p.Run(ctx, review.Request{
-		JobID:      "20260810-213000-a1b2c3d4", // 任意。呼び出し側が持つ相関ID
+		JobID:      "20260810-213000-a1b2c3d4", // optional; a correlation ID held by the caller
 		RepoURL:    "ssh://git@github.com/shouni/example.git",
 		Base:       "main",
 		Head:       "develop",
-		Mode:       "code", // 任意の文字列。意味づけは PromptGenerator の実装が決めます
+		Mode:       "code", // any string; its meaning is decided by the PromptGenerator implementation
 		Model:      modelName,
 		StorageURI: "gs://bucket/reviews/20260810-213000-a1b2c3d4/report.json",
 		PublicURL:  "https://example.com/history/20260810-213000-a1b2c3d4",
 	})
 	if err != nil {
-		// 工程名はエラー自身が持つので、別のフィールドと突き合わせる必要はありません。
-		// 種類は review.ErrInvalidRequest / ErrRefNotFound / ErrUnsupportedRepoURL /
-		// ErrDiffTooLarge を errors.Is で判別できます。
-		log.Printf("%s で失敗しました: %v", review.StepOf(err), err)
+		// The error carries the step name itself, so there is no separate field to match it with.
+		// The kind can be told with errors.Is against review.ErrInvalidRequest / ErrRefNotFound /
+		// ErrUnsupportedRepoURL / ErrDiffTooLarge.
+		log.Printf("failed at %s: %v", review.StepOf(err), err)
 		return err
 	}
 
-	// report はレビューが成立した場合のみ非 nil です。差分が無ければ nil で返ります。
+	// report is non-nil only when the review succeeded. With no diff it comes back nil.
 	log.Printf("status=%s published=%v duration=%s",
 		result.Status, result.Published(), result.Duration)
 	return nil
 }
 ```
 
-**呼び出し側が前提にしてよい取り決めも、それぞれの godoc に書いてあります** — `Notifier` が `Run`
-1 回につき必ず 1 回呼ばれること、`Publisher` が成功時だけ呼ばれ作業ディレクトリはその前に解放
-されること、通知の失敗はパイプラインを失敗させないこと、レビュー本体の上限は `Run` の context では
-なく `pipeline.WithRunTimeout` で設定すること、差分なしは失敗ではなく差分が大きすぎるのは失敗で
-あること、`ParseInfo.Truncated` を見ないと切り詰めたレビューを完全なものとして公開すること、
-同じリポジトリを同時にレビューするなら `git.WithDirNamer` が要ること。
+**The guarantees a caller may rely on are written in the respective godoc, too** — that the
+`Notifier` is called exactly once per `Run`; that the `Publisher` is called only on success and the
+working directory is released before it; that a notification failure does not fail the pipeline;
+that the limit on the review itself is set with `pipeline.WithRunTimeout`, not with `Run`'s
+context; that no diff is not a failure while a diff that is too large is; that ignoring
+`ParseInfo.Truncated` publishes a truncated review as a complete one; and that reviewing the same
+repository concurrently needs `git.WithDirNamer`.
 
 ---
 
-## 🔑 リポジトリURLは SSH 形式だけ (SSH only)
+## 🔑 Repository URLs are SSH only
 
-認証は SSH 鍵だけを扱うため、受け付けるのは scp 形式（`git@github.com:owner/repo.git`）・`ssh://`
-スキーム・ローカルパス（開発とテスト用）です。**`http(s)` は形式のエラーとして断ります**
-（理由は `git.GoGit.Prepare` の godoc）。
+Authentication handles SSH keys only, so what is accepted is the scp form
+(`git@github.com:owner/repo.git`), the `ssh://` scheme, and local paths (for development and
+tests). **`http(s)` is refused as a form error** (the reason is in the godoc of
+`git.GoGit.Prepare`).
 
 ---
 
-## 🔄 シーケンスフロー (Sequence Flow)
+## 🔄 Sequence Flow
 
 ```mermaid
 sequenceDiagram
@@ -139,10 +148,10 @@ sequenceDiagram
     participant PL as pipeline.Pipeline
     participant SF as DiffSourceFactory (git)
     participant DS as DiffSource
-    participant PG as PromptGenerator (呼び出し側)
-    participant AI as WorkspaceReviewer (呼び出し側)
-    participant PB as Publisher (呼び出し側)
-    participant NT as Notifier (呼び出し側)
+    participant PG as PromptGenerator (caller)
+    participant AI as WorkspaceReviewer (caller)
+    participant PB as Publisher (caller)
+    participant NT as Notifier (caller)
 
     App->>PL: Run(ctx, Request)
     PL->>PL: Request.Validate()
@@ -152,20 +161,20 @@ sequenceDiagram
     PL->>DS: Diff(ctx, base, head)
     DS-->>PL: patch
 
-    alt 差分なし
+    alt No diff
         PL->>DS: Close(ctx)
         PL->>NT: Notify(StatusSkipped)
         PL-->>App: Result{SKIPPED}, nil, nil
-    else 上限超過（WithMaxDiffBytes 設定時）
+    else Over the limit (when WithMaxDiffBytes is set)
         PL->>DS: Close(ctx)
         PL->>NT: Notify(StatusFailed, ErrDiffTooLarge)
         PL-->>App: Result{FAILURE}, nil, err
-    else 差分あり
+    else Diff present
         PL->>PG: Generate(mode, diff)
         PG-->>PL: prompt
 
         PL->>DS: CheckoutHead(ctx, head)
-        DS-->>PL: 作業ディレクトリ（Head の状態）
+        DS-->>PL: working directory (at Head)
         PL->>AI: Review(ctx, model, prompt, ws)
         AI-->>PL: review.Report
         PL->>DS: Close(ctx)
@@ -176,12 +185,12 @@ sequenceDiagram
         PL-->>App: Result{SUCCESS}, Report, nil
     end
 
-    Note over PL,NT: どの工程で失敗しても Notify は 1 回だけ呼ばれ、<br/>Result{FAILURE} と工程名付きのエラーが返ります
-    Note over PL,NT: Publish / Notify / Close は呼び出し元の締切から切り離して実行
+    Note over PL,NT: Whichever step fails, Notify is called exactly once,<br/>and Result{FAILURE} is returned with an error carrying the step name
+    Note over PL,NT: Publish / Notify / Close run detached from the caller's deadline
 ```
 
 ---
 
-## 📜 ライセンス (License)
+## 📜 License
 
-このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
+This project is released under the [MIT License](https://opensource.org/licenses/MIT).

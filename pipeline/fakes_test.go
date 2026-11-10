@@ -12,7 +12,7 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// テスト用のリクエストです。
+// testRequest returns the request used in tests.
 func testRequest() review.Request {
 	return review.Request{
 		RepoURL:    "ssh://git@github.com/shouni/example.git",
@@ -36,12 +36,12 @@ func testReport() review.Report {
 	}
 }
 
-// discardLogger は、テスト出力を汚さないロガーです。
+// discardLogger is a logger that keeps test output clean.
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// fakeSource は review.DiffSource のテスト実装です。
+// fakeSource is a test implementation of review.DiffSource.
 type fakeSource struct {
 	diff        string
 	diffErr     error
@@ -83,7 +83,7 @@ func (f *fakeSource) wasClosed() bool {
 	return f.closed
 }
 
-// fakeFactory は review.DiffSourceFactory のテスト実装です。
+// fakeFactory is a test implementation of review.DiffSourceFactory.
 type fakeFactory struct {
 	source  *fakeSource
 	openErr error
@@ -96,7 +96,7 @@ func (f *fakeFactory) Open(context.Context, review.Request) (review.DiffSource, 
 	return f.source, nil
 }
 
-// fakePrompts は review.PromptGenerator のテスト実装です。
+// fakePrompts is a test implementation of review.PromptGenerator.
 type fakePrompts struct {
 	prompt string
 	err    error
@@ -113,7 +113,7 @@ func (f *fakePrompts) Generate(mode, diff string) (string, error) {
 	return f.prompt, nil
 }
 
-// fakeReviewer は review.WorkspaceReviewer のテスト実装です。
+// fakeReviewer is a test implementation of review.WorkspaceReviewer.
 type fakeReviewer struct {
 	report review.Report
 	info   review.RunInfo
@@ -131,13 +131,13 @@ func (f *fakeReviewer) Review(
 	f.called = true
 	f.gotModel, f.gotPrompt, f.gotWS = model, prompt, ws
 	if f.err != nil {
-		// 失敗してもトークンは消費済みなので、計測値は返します。
+		// The tokens are spent even on failure, so the measurements are returned.
 		return review.Report{}, f.info, f.err
 	}
 	return f.report, f.info, nil
 }
 
-// fakePublisher は review.Publisher のテスト実装です。
+// fakePublisher is a test implementation of review.Publisher.
 type fakePublisher struct {
 	err error
 
@@ -153,15 +153,15 @@ func (f *fakePublisher) Publish(ctx context.Context, _ review.Request, report re
 	return f.err
 }
 
-// fakeNotifier は review.Notifier のテスト実装です。
+// fakeNotifier is a test implementation of review.Notifier.
 type fakeNotifier struct {
 	err error
 
 	mu     sync.Mutex
 	events []review.Notification
 	ctxErr error
-	// remaining は通知時点で context に残っていた時間です。公開と予算を
-	// 食い合っていないことの確認に使います。
+	// remaining is the time left on the context at notification. It is used to check that the
+	// notification does not share its budget with publishing.
 	remaining time.Duration
 }
 
@@ -184,7 +184,7 @@ func (f *fakeNotifier) last(t *testing.T) review.Notification {
 	defer f.mu.Unlock()
 
 	if len(f.events) == 0 {
-		t.Fatal("通知が1件も行われていません")
+		t.Fatal("no notification was sent")
 	}
 	return f.events[len(f.events)-1]
 }
@@ -195,7 +195,7 @@ func (f *fakeNotifier) count() int {
 	return len(f.events)
 }
 
-// harness は、既定の依存を組んだパイプライン一式です。
+// harness is a full pipeline set wired with the default dependencies.
 type harness struct {
 	factory   *fakeFactory
 	source    *fakeSource
@@ -227,7 +227,7 @@ func newHarness(t *testing.T, opts ...Option) *harness {
 		Notifier:          h.notifier,
 	}, append([]Option{WithLogger(discardLogger())}, opts...)...)
 	if err != nil {
-		t.Fatalf("パイプラインの生成に失敗: %v", err)
+		t.Fatalf("failed to create the pipeline: %v", err)
 	}
 
 	h.pipeline = p

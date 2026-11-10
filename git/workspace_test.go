@@ -11,13 +11,13 @@ import (
 	"github.com/shouni/go-review-kit/review"
 )
 
-// readMainGo は、作業ディレクトリの main.go を読みます。
+// readMainGo reads main.go in the working directory.
 func readMainGo(t *testing.T, dir string) string {
 	t.Helper()
 
 	content, err := os.ReadFile(filepath.Join(dir, "main.go"))
 	if err != nil {
-		t.Fatalf("main.go の読み込みに失敗: %v", err)
+		t.Fatalf("failed to read main.go: %v", err)
 	}
 	return string(content)
 }
@@ -29,26 +29,26 @@ func TestCLICheckoutHead(t *testing.T) {
 
 	cli, err := NewCLI(localPath(t), WithBase(repo.base), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("CLI の生成に失敗: %v", err)
+		t.Fatalf("failed to create the CLI: %v", err)
 	}
 	if err := cli.Prepare(ctx, repo.path); err != nil {
-		t.Fatalf("Prepare に失敗: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
 	dir, err := cli.CheckoutHead(ctx, repo.head)
 	if err != nil {
-		t.Fatalf("CheckoutHead に失敗: %v", err)
+		t.Fatalf("CheckoutHead failed: %v", err)
 	}
 	if !strings.Contains(readMainGo(t, dir), "hello") {
-		t.Error("作業ツリーが head の内容になっていません")
+		t.Error("the working tree does not have the contents of head")
 	}
 
-	// Close で基準参照へ戻ることも確認します（head のまま残ると次回の Diff 前提が崩れます）。
+	// Also check that Close returns to the base ref (left at head, the next Diff's assumptions break).
 	if err := cli.Close(ctx); err != nil {
-		t.Fatalf("Close に失敗: %v", err)
+		t.Fatalf("Close failed: %v", err)
 	}
 	if strings.Contains(readMainGo(t, dir), "hello") {
-		t.Error("Close 後も作業ツリーが head のままです")
+		t.Error("the working tree is still at head after Close")
 	}
 }
 
@@ -59,23 +59,23 @@ func TestCLICheckoutHeadRemovesUntracked(t *testing.T) {
 
 	cli, err := NewCLI(localPath(t), WithBase(repo.base), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("CLI の生成に失敗: %v", err)
+		t.Fatalf("failed to create the CLI: %v", err)
 	}
 	if err := cli.Prepare(ctx, repo.path); err != nil {
-		t.Fatalf("Prepare に失敗: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
-	// 前回の実行が Close へ到達せず残した未追跡ファイルを装います。
+	// Pose as an untracked file left by a previous run that never reached Close.
 	leftover := filepath.Join(cli.localPath, "leftover.txt")
 	if err := os.WriteFile(leftover, []byte("stale"), 0o600); err != nil {
-		t.Fatalf("未追跡ファイルの作成に失敗: %v", err)
+		t.Fatalf("failed to create the untracked file: %v", err)
 	}
 
 	if _, err := cli.CheckoutHead(ctx, repo.head); err != nil {
-		t.Fatalf("CheckoutHead に失敗: %v", err)
+		t.Fatalf("CheckoutHead failed: %v", err)
 	}
 	if _, err := os.Stat(leftover); !os.IsNotExist(err) {
-		t.Error("未追跡ファイルが残っています")
+		t.Error("untracked file is still there")
 	}
 }
 
@@ -86,14 +86,14 @@ func TestCLICheckoutHeadUnknownRef(t *testing.T) {
 
 	cli, err := NewCLI(localPath(t), WithBase(repo.base), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("CLI の生成に失敗: %v", err)
+		t.Fatalf("failed to create the CLI: %v", err)
 	}
 	if err := cli.Prepare(ctx, repo.path); err != nil {
-		t.Fatalf("Prepare に失敗: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 
 	if _, err := cli.CheckoutHead(ctx, "no-such-ref"); !errors.Is(err, review.ErrRefNotFound) {
-		t.Errorf("ErrRefNotFound が返っていません: %v", err)
+		t.Errorf("ErrRefNotFound was not returned: %v", err)
 	}
 }
 
@@ -103,34 +103,34 @@ func TestGoGitCheckoutHead(t *testing.T) {
 
 	g, err := NewGoGit(localPath(t), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("GoGit の生成に失敗: %v", err)
+		t.Fatalf("failed to create the GoGit: %v", err)
 	}
 	if err := g.Prepare(ctx, repo.path); err != nil {
-		t.Fatalf("Prepare に失敗: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := g.Close(context.Background()); err != nil {
-			t.Errorf("Close に失敗: %v", err)
+			t.Errorf("Close failed: %v", err)
 		}
 	})
 
 	dir, err := g.CheckoutHead(ctx, repo.head)
 	if err != nil {
-		t.Fatalf("CheckoutHead に失敗: %v", err)
+		t.Fatalf("CheckoutHead failed: %v", err)
 	}
 	if !strings.Contains(readMainGo(t, dir), "hello") {
-		t.Error("作業ツリーが head の内容になっていません")
+		t.Error("the working tree does not have the contents of head")
 	}
 }
 
 func TestGoGitCheckoutHeadBeforePrepare(t *testing.T) {
 	g, err := NewGoGit(localPath(t), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("GoGit の生成に失敗: %v", err)
+		t.Fatalf("failed to create the GoGit: %v", err)
 	}
 
 	if _, err := g.CheckoutHead(context.Background(), "main"); err == nil {
-		t.Fatal("Prepare 前の CheckoutHead がエラーになりません")
+		t.Fatal("CheckoutHead before Prepare is not an error")
 	}
 }
 
@@ -140,18 +140,18 @@ func TestGoGitCheckoutHeadUnknownRef(t *testing.T) {
 
 	g, err := NewGoGit(localPath(t), WithLogger(quietLogger()))
 	if err != nil {
-		t.Fatalf("GoGit の生成に失敗: %v", err)
+		t.Fatalf("failed to create the GoGit: %v", err)
 	}
 	if err := g.Prepare(ctx, repo.path); err != nil {
-		t.Fatalf("Prepare に失敗: %v", err)
+		t.Fatalf("Prepare failed: %v", err)
 	}
 	t.Cleanup(func() {
 		if err := g.Close(context.Background()); err != nil {
-			t.Errorf("Close に失敗: %v", err)
+			t.Errorf("Close failed: %v", err)
 		}
 	})
 
 	if _, err := g.CheckoutHead(ctx, "no-such-ref"); !errors.Is(err, review.ErrRefNotFound) {
-		t.Errorf("ErrRefNotFound が返っていません: %v", err)
+		t.Errorf("ErrRefNotFound was not returned: %v", err)
 	}
 }

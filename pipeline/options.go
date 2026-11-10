@@ -5,13 +5,13 @@ import (
 	"time"
 )
 
-// Option は Pipeline の任意設定です。
+// Option is an optional setting of a Pipeline.
 type Option func(*Pipeline)
 
-// WithLogger は、パイプラインが使うロガーを差し替えます。
+// WithLogger replaces the logger the pipeline uses.
 //
-// 既定は slog.Default() です。パッケージ変数のロガーを直接呼ぶと、出力先も属性も
-// 呼び出し側から制御できなくなります。
+// The default is slog.Default(). Calling a package-level logger directly would take both the
+// output destination and the attributes out of the caller's control.
 func WithLogger(logger *slog.Logger) Option {
 	return func(p *Pipeline) {
 		if logger != nil {
@@ -20,8 +20,8 @@ func WithLogger(logger *slog.Logger) Option {
 	}
 }
 
-// WithPublishTimeout は、公開・通知・後始末に与える上限を変更します。
-// 0 以下の値は無視されます。
+// WithPublishTimeout changes the limit given to publishing, notification and cleanup.
+// Values of 0 or less are ignored.
 func WithPublishTimeout(d time.Duration) Option {
 	return func(p *Pipeline) {
 		if d > 0 {
@@ -30,22 +30,23 @@ func WithPublishTimeout(d time.Duration) Option {
 	}
 }
 
-// WithRunTimeout は、差分取得から AI レビューまでに与える上限を設定します。
-// 既定は無制限で、0 以下の値は無視されます。
+// WithRunTimeout sets the limit given to everything from taking the diff to the AI review.
+// The default is unlimited, and values of 0 or less are ignored.
 //
-// 公開・通知・後始末には掛かりません。これらは呼び出し元の締切と cancel を外した
-// context で、WithPublishTimeout の独立した上限のもとに実行されます。レビューは重く、
-// 打ち切られた直後は呼び出し元の context が既に期限切れなので、そのまま使うと失敗を
-// 報告する通知や作業ディレクトリの後始末まで道連れで失敗するためです。この切り離しに
-// より、レビューがタイムアウトで打ち切られた直後でも失敗の記録と通知は届きます。
+// It does not apply to publishing, notification or cleanup. Those run on a context stripped of
+// the caller's deadline and cancel, under WithPublishTimeout's separate limit. A review is heavy,
+// and right after it is cut off the caller's context has already expired, so using it as-is would
+// drag down with it the notification reporting the failure and the cleanup of the working
+// directory. Thanks to this detachment, the failure is recorded and notified even right after the
+// review was cut off by a timeout.
 //
-// したがって、レビュー本体の上限は Run へ渡す context ではなくこちらで設定して
-// ください。自分で締切を被せると上の切り離しより外側に掛かり、打ち切りと同時に
-// 通知も落ちます。
+// So set the limit on the review itself here, not on the context passed to Run. A deadline of
+// your own applies outside the detachment above, and the notification goes down together with the
+// cutoff.
 //
-// 上限を持つこと自体の意味は、外側（ジョブキューの応答待ちなど）に打ち切られる前に
-// 自分から諦めて、失敗を記録・通知してから終わることです。外側に先を越されると
-// プロセスごと落ちて何も残りません。
+// The point of having a limit at all is to give up on your own before the outside (a job queue
+// waiting for a response, say) cuts you off, and to finish after recording and notifying the
+// failure. If the outside gets there first, the whole process goes down and nothing is left.
 func WithRunTimeout(d time.Duration) Option {
 	return func(p *Pipeline) {
 		if d > 0 {
@@ -54,21 +55,21 @@ func WithRunTimeout(d time.Duration) Option {
 	}
 }
 
-// WithMaxDiffBytes は、AI へ送る差分の上限をバイト数で設定します。
-// 既定は 0（無制限）で、0 以下の値は無視されます。
+// WithMaxDiffBytes sets the limit, in bytes, on the diff sent to the AI.
+// The default is 0 (unlimited), and values of 0 or less are ignored.
 //
-// 超えた場合、レビューは実行されず review.ErrDiffTooLarge を包んだエラーで失敗します
-// （工程は review.StepDiff）。失敗として扱うので、Notifier へは他の失敗と同じ経路で
-// 届きます。
+// When it is exceeded, the review does not run and fails with an error wrapping
+// review.ErrDiffTooLarge (the step is review.StepDiff). It is treated as a failure, so it reaches
+// the Notifier along the same path as any other failure.
 //
-// トークンではなくバイトで測ります。バイト数は差分を受け取った時点で手元にあり、
-// トークン数の算出はモデル提供元への往復を要します。避けたいコストを払って避けるか
-// どうかを決めることになるため、精度より安さを取っています。目安として、UTF-8 の
-// 日本語は 1 MiB でおよそ 30〜35 万文字です。
+// It measures bytes, not tokens. The byte count is at hand as soon as the diff arrives, while
+// counting tokens takes a round trip to the model provider. That would mean paying the very cost
+// you want to avoid in order to decide whether to avoid it, so cheapness wins over precision. As a
+// rough guide, 1 MiB of Japanese text in UTF-8 is about 300,000 to 350,000 characters.
 //
-// 切り詰めではなく失敗にしてください、というのがこの上限の趣旨です。上限まで
-// truncate して送ると、モデルは差分の一部だけを見たまま *成功として* レポートを返すため、
-// 質の落ちたレビューが成果物として残ります。落ちるより気付きにくい形です。
+// The intent of this limit is: fail, do not truncate. Truncating to the limit and sending would
+// have the model return a report *as a success* having seen only part of the diff, leaving a
+// lower-quality review behind as the artifact. That is harder to notice than a failure.
 func WithMaxDiffBytes(n int) Option {
 	return func(p *Pipeline) {
 		if n > 0 {
