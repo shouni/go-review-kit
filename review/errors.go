@@ -49,15 +49,17 @@ var (
 
 // Pipeline step names. They go into StepError.Step and can be used in notification text.
 //
-// The values are Japanese on purpose: they are shown to the owner as-is in notifications.
+// Callers should compare against these constants, not their text: the values were Japanese
+// until 2026-11-10 and are English now, so StepError.Error() reads as one language
+// ("AI review failed: ...").
 const (
-	StepValidate = "リクエスト検証"
-	StepPrepare  = "リポジトリの準備"
-	StepDiff     = "コード差分取得"
-	StepPrompt   = "プロンプト生成"
-	StepCheckout = "Headチェックアウト"
-	StepReview   = "AIレビュー"
-	StepPublish  = "結果公開"
+	StepValidate = "request validation"
+	StepPrepare  = "repository preparation"
+	StepDiff     = "diff retrieval"
+	StepPrompt   = "prompt generation"
+	StepCheckout = "head checkout"
+	StepReview   = "AI review"
+	StepPublish  = "result publishing"
 )
 
 // StepError is an error that records which step failed.

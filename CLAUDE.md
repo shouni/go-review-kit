@@ -136,8 +136,8 @@ have lived in the consuming app ever since. Direct dependency is `go-git` only â
 
 - **Language**: comments, doc comments, error / log / panic messages and test assertion messages
   are English (moved from Japanese on 2026-11-10; do not mix Japanese back in). Japanese stays only
-  where it is data: the step names in `review.Step*` (shown as-is in the owner's notifications),
-  and model-output fixtures in tests. Test subtest names (`t.Run` names and table `name` fields)
+  where it is data: model-output fixtures in tests. The step names in `review.Step*` are English
+  too (since 2026-11-10); callers compare against the constants, never the text. Test subtest names (`t.Run` names and table `name` fields)
   are English too; Go test function names are unchanged.
 - **READMEs**: `README.md` is English and `README.ja.md` is its Japanese version. Update the two
   together.
